@@ -1,0 +1,19 @@
+{
+  "appName": "Windows本地开发机",
+  "serverUrl": "http://127.0.0.1:8086",
+  "serverToken": "lp-agent-secret-token",
+  "env": "local",
+  "reportIntervalMs": 10000,
+  "probes": [
+    {
+      "probeName": "监控中心健康自检",
+      "appName": "monitor-server",
+      "url": "http://127.0.0.1:8086/api/setup/status",
+      "method": "GET",
+      "intervalSeconds": 15,
+      "timeoutMs": 3000,
+      "authType": "NONE",
+      "assertStatusCode": 200
+    }
+  ]
+}

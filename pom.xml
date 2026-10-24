@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.github.chaoking320</groupId>
+    <artifactId>lightpulse-apm</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>LightPulse APM</name>
+    <description>Lightweight, Zero-Intrusive APM, Server &amp; Host Monitoring, and Probe System</description>
+    <url>https://github.com/chaoking320/monitor-server-agent</url>
+
+    <licenses>
+        <license>
+            <name>The Apache Software License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>chaoking320</id>
+            <name>chaoking320</name>
+            <email>chaoking320@github.com</email>
+            <url>https://github.com/chaoking320</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/chaoking320/monitor-server-agent.git</connection>
+        <developerConnection>scm:git:ssh://github.com:chaoking320/monitor-server-agent.git</developerConnection>
+        <url>https://github.com/chaoking320/monitor-server-agent</url>
+    </scm>
+
+    <modules>
+        <module>monitor-server</module>
+        <module>monitor-agent</module>
+        <module>monitor-spring-boot2-starter</module>
+        <module>monitor-spring-boot3-starter</module>
+    </modules>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+    </properties>
+</project>

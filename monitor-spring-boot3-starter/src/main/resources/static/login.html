@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 - LightPulse APM 全景监控平台</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: radial-gradient(circle at 50% 20%, #1e293b 0%, #0f172a 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #e2e8f0;
+    padding: 16px;
+  }
+  .login-card {
+    background: rgba(30, 41, 59, 0.75);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    width: 100%;
+    max-width: 420px;
+    padding: 36px 32px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    animation: fadeIn 0.4s ease-out;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .brand-header {
+    text-align: center;
+    margin-bottom: 28px;
+  }
+  .brand-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+    border-radius: 14px;
+    font-size: 26px;
+    margin-bottom: 14px;
+    box-shadow: 0 6px 16px rgba(59, 130, 246, 0.35);
+  }
+  .brand-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #f8fafc;
+    letter-spacing: 0.5px;
+  }
+  .brand-subtitle {
+    font-size: 13px;
+    color: #94a3b8;
+    margin-top: 6px;
+  }
+  .form-group {
+    margin-bottom: 20px;
+  }
+  .form-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: #cbd5e1;
+    margin-bottom: 8px;
+  }
+  .input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .input-icon {
+    position: absolute;
+    left: 14px;
+    font-size: 16px;
+    color: #64748b;
+    pointer-events: none;
+  }
+  .form-control {
+    width: 100%;
+    padding: 11px 14px 11px 40px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    color: #f8fafc;
+    font-size: 14px;
+    outline: none;
+    transition: all 0.2s ease;
+  }
+  .form-control:focus {
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  }
+  .form-control::placeholder {
+    color: #64748b;
+  }
+  .error-alert {
+    display: none;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 18px;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn-submit {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    border: none;
+    border-radius: 8px;
+    color: #ffffff;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    transition: all 0.2s ease;
+  }
+  .btn-submit:hover {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    box-shadow: 0 6px 16px rgba(37, 99, 235, 0.4);
+    transform: translateY(-1px);
+  }
+  .btn-submit:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+  }
+  .tips-box {
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.12);
+    font-size: 12px;
+    color: #94a3b8;
+    line-height: 1.6;
+  }
+  .tips-box strong {
+    color: #cbd5e1;
+  }
+  .tips-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    font-family: monospace;
+  }
+</style>
+</head>
+<body>
+
+<div class="login-card">
+  <div class="brand-header">
+    <div class="brand-logo">🚀</div>
+    <h1 class="brand-title">LightPulse APM</h1>
+    <p class="brand-subtitle">轻量级全栈应用与主机运行保障中心</p>
+  </div>
+
+  <div id="errorAlert" class="error-alert">
+    <span>⚠️</span>
+    <span id="errorMsg">账号或密码错误</span>
+  </div>
+
+  <form id="loginForm" onsubmit="handleLogin(event)">
+    <div class="form-group">
+      <label class="form-label">管理员账号</label>
+      <div class="input-wrapper">
+        <span class="input-icon">👤</span>
+        <input type="text" id="username" class="form-control" placeholder="请输入管理员账号" required autocomplete="username">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">登录密码</label>
+      <div class="input-wrapper">
+        <span class="input-icon">🔒</span>
+        <input type="password" id="password" class="form-control" placeholder="请输入管理员密码" required autocomplete="current-password">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">图形安全验证码</label>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div class="input-wrapper" style="flex:1;">
+          <span class="input-icon">🛡️</span>
+          <input type="text" id="captchaCode" class="form-control" placeholder="请输入右侧验证码" maxlength="6" required autocomplete="off" style="text-transform:uppercase;">
+        </div>
+        <div id="captchaImgWrapper" onclick="loadCaptcha()" title="看不清？点击更换验证码" style="cursor:pointer;display:flex;align-items:center;background:#0f172a;border:1px solid #334155;border-radius:8px;overflow:hidden;height:42px;width:120px;justify-content:center;user-select:none;">
+          <img id="captchaImg" style="width:100%;height:100%;display:none;object-fit:cover;" alt="验证码">
+          <span id="captchaLoading" style="font-size:12px;color:#94a3b8;">加载中...</span>
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" id="submitBtn" class="btn-submit">立即登录</button>
+  </form>
+
+  <div class="tips-box">
+    <div>🛡️ <strong>企业级监控安全保障</strong></div>
+    <div style="margin-top:4px;">
+      • 探针与主机 Agent 上报通道已自动加白，无惧网关拦截。
+    </div>
+    <div style="margin-top:4px;">
+      • 登录控制台后，支持在右上角随时修改管理员密码。
+    </div>
+  </div>
+</div>
+
+<script>
+const BASE = (function() {
+  const p = window.location.pathname;
+  const i = p.indexOf('/apm');
+  if (i !== -1) {
+    return p.substring(0, i + 4);
+  }
+  const lastSlash = p.lastIndexOf('/');
+  return lastSlash > 0 ? p.substring(0, lastSlash) : '';
+})();
+
+// 如果本地已有有效 Token，先尝试免密进入
+(function checkExistingSession() {
+  const token = localStorage.getItem('LP_TOKEN');
+  if (token) {
+    fetch(BASE + '/api/auth/status', {
+      headers: { 'Authorization': 'Bearer ' + token, 'X-Token': token }
+    }).then(res => res.json()).then(data => {
+      if (data && data.code === 200 && data.data && data.data.authenticated) {
+        window.location.replace(BASE + '/index.html');
+      }
+    }).catch(() => {});
+  }
+})();
+
+let currentCaptchaKey = '';
+
+function loadCaptcha() {
+  const img = document.getElementById('captchaImg');
+  const loading = document.getElementById('captchaLoading');
+  if (img) img.style.display = 'none';
+  if (loading) {
+    loading.style.display = 'block';
+    loading.innerText = '加载中...';
+  }
+
+  fetch(BASE + '/api/auth/captcha')
+    .then(r => r.json())
+    .then(res => {
+      if (res && res.code === 200 && res.data) {
+        currentCaptchaKey = res.data.captchaKey || '';
+        if (img) {
+          img.src = res.data.captchaImage;
+          img.style.display = 'block';
+        }
+        if (loading) loading.style.display = 'none';
+        const codeInput = document.getElementById('captchaCode');
+        if (codeInput) codeInput.value = '';
+      } else {
+        if (loading) loading.innerText = '点击重试';
+      }
+    })
+    .catch(() => {
+      if (loading) loading.innerText = '点击重试';
+    });
+}
+
+// 页面加载完毕自动拉取首张验证码
+document.addEventListener('DOMContentLoaded', loadCaptcha);
+// 兜底立即执行一次
+loadCaptcha();
+
+function showError(msg) {
+  const alertEl = document.getElementById('errorAlert');
+  const msgEl = document.getElementById('errorMsg');
+  msgEl.innerText = msg || '登录失败，请重试';
+  alertEl.style.display = 'flex';
+}
+
+function hideError() {
+  document.getElementById('errorAlert').style.display = 'none';
+}
+
+function handleLogin(event) {
+  event.preventDefault();
+  hideError();
+
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value.trim();
+  const captchaCode = (document.getElementById('captchaCode').value || '').trim();
+  const btn = document.getElementById('submitBtn');
+
+  if (!username || !password) {
+    showError('请输入完整的账号与密码');
+    return;
+  }
+  if (!captchaCode) {
+    showError('请输入右侧图形验证码');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerText = '正在验证身份...';
+
+  fetch(BASE + '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username,
+      password,
+      captchaKey: currentCaptchaKey,
+      captchaCode
+    })
+  })
+  .then(res => res.json())
+  .then(res => {
+    if (res.code === 200 && res.data && res.data.token) {
+      const token = res.data.token;
+      // 写入 localStorage 和 Cookie
+      localStorage.setItem('LP_TOKEN', token);
+      localStorage.setItem('LP_USER', res.data.username || username);
+      document.cookie = `LP_TOKEN=${token}; path=/; max-age=604800; SameSite=Lax`;
+
+      btn.innerText = '登录成功，正在进入...';
+      setTimeout(() => {
+        window.location.replace(BASE + '/index.html');
+      }, 300);
+    } else {
+      btn.disabled = false;
+      btn.innerText = '立即登录';
+      showError(res.message || '账号或密码不正确');
+      // 失败后自动刷新验证码
+      loadCaptcha();
+    }
+  })
+  .catch(err => {
+    btn.disabled = false;
+    btn.innerText = '立即登录';
+    showError('网络连接失败或服务未响应: ' + err.message);
+    loadCaptcha();
+  });
+}
+</script>
+
+</body>
+</html>

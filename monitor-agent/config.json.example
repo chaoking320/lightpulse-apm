@@ -1,0 +1,10 @@
+{
+  "appName": "ragflow-测试服务节点01",
+  "serverUrl": "http://172.18.4.104:8086",
+  "serverToken": "lp-agent-secret-token",
+  "env": "test",
+  "hostName": "ragflow-01",
+  "enableProbe": false,
+  "reportIntervalMs": 10000,
+  "probes": []
+}

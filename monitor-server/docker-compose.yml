@@ -1,0 +1,43 @@
+version: '3.8'
+services:
+  monitor-server:
+    build: .
+    ports:
+      - "8086:8086"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/monitor?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=monitor_123
+      - MONITOR_VICTORIAMETRICS_URL=http://victoriametrics:8428
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.98.0
+    container_name: victoriametrics
+    ports:
+      - "8428:8428"
+    command:
+      - "-retentionPeriod=30d"
+    volumes:
+      - vmdata:/storage
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: monitor_123
+      MYSQL_DATABASE: monitor
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - monitor-mysql-data:/var/lib/mysql
+
+volumes:
+  monitor-mysql-data:
+  vmdata:

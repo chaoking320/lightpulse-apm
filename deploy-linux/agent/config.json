@@ -1,0 +1,6 @@
+{
+  "appName": "jk-kms-backend",
+  "serverUrl": "https://your-domain.example.com/kms_backend",
+  "env": "prod",
+  "reportIntervalMs": 10000
+}
