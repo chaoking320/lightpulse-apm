@@ -1,0 +1,31 @@
+server:
+  port: 8086
+spring:
+  application:
+    name: monitor-server
+  datasource:
+    url: jdbc:h2:file:./data/monitor_db;MODE=MySQL;DATABASE_TO_LOWER=TRUE;AUTO_SERVER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+logging:
+  level:
+    com.monitor: DEBUG
+
+# LightPulse 监控系统配置
+monitor:
+  victoriametrics:
+    enabled: true
+    url: http://127.0.0.1:8428
+  alert:
+    # 企微 / 钉钉 / 飞书 机器人 Webhook 地址（留空则只记录告警到日志与数据库）
+    webhook: ""

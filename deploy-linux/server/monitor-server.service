@@ -1,0 +1,16 @@
+[Unit]
+Description=LightPulse Monitor Server Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/lightpulse/server
+ExecStart=/usr/bin/java -Xms256m -Xmx512m -jar /opt/lightpulse/server/monitor-server-1.0.0-SNAPSHOT.jar
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/lightpulse/server/server.log
+StandardError=append:/opt/lightpulse/server/server.log
+
+[Install]
+WantedBy=multi-user.target

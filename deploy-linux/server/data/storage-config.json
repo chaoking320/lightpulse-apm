@@ -1,0 +1,11 @@
+{
+  "storageType" : "ELASTICSEARCH",
+  "initialized" : true,
+  "esUrl" : "http://172.18.4.106:9200",
+  "esUsername" : "elastic",
+  "esPassword" : "yClQW5=nWOJajm8dJhpX",
+  "esIndexPrefix" : "apm_monitor",
+  "mysqlUrl" : "jdbc:mysql://127.0.0.1:3306/monitor?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai",
+  "mysqlUsername" : "root",
+  "mysqlPassword" : ""
+}

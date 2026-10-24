@@ -1,0 +1,16 @@
+[Unit]
+Description=LightPulse Monitor Agent Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/lightpulse/agent
+ExecStart=/usr/bin/java -Xms16m -Xmx64m -jar /opt/lightpulse/agent/monitor-agent-1.0.0-SNAPSHOT.jar -c /opt/lightpulse/agent/config.json
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/lightpulse/agent/agent.log
+StandardError=append:/opt/lightpulse/agent/agent.log
+
+[Install]
+WantedBy=multi-user.target

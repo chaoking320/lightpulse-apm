@@ -1,0 +1,6 @@
+{
+  "appName": "jk-kms-backend",
+  "serverUrl": "https://aikms.jinkosolar.com/kms_backend",
+  "env": "prod",
+  "reportIntervalMs": 10000
+}

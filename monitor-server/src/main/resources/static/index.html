@@ -1,0 +1,2177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monitor APM</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dayjs/1.11.10/dayjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/antd/5.12.8/reset.min.css">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background: #f5f5f5; color: #333; }
+.header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .sub { font-size: 12px; opacity: .7; }
+.container { max-width: 1400px; margin: 0 auto; padding: 16px; }
+.kpi-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 16px; }
+.kpi-card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.kpi-card .label { font-size: 12px; color: #888; }
+.kpi-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+.kpi-card .value.green { color: #52c41a; }
+.kpi-card .value.red { color: #ff4d4f; }
+.kpi-card .value.blue { color: #1890ff; }
+.chart-box { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.chart-box h3 { font-size: 14px; margin-bottom: 12px; }
+.chart { height: 250px; }
+.table-wrap { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #f0f0f0; white-space: nowrap; }
+th { font-weight: 600; color: #666; font-size: 12px; }
+tr:hover td { background: #fafafa; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+.badge.green { background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
+.badge.red { background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7; }
+.badge.blue { background: #e6f7ff; color: #1890ff; border: 1px solid #91d5ff; }
+.badge.orange { background: #fff7e6; color: #fa8c16; border: 1px solid #ffd591; }
+.badge.gray { background: #fafafa; color: #999; border: 1px solid #d9d9d9; }
+.tab-bar { display: flex; gap: 0; margin-bottom: 16px; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.tab { padding: 12px 24px; cursor: pointer; font-size: 14px; border: none; background: transparent; }
+.tab.active { background: #1a1a2e; color: #fff; font-weight: 500; }
+.tab:hover:not(.active) { background: #f5f5f5; }
+.btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border-radius: 4px; border: 1px solid #d9d9d9; font-size: 13px; cursor: pointer; background: #fff; }
+.btn:hover { border-color: #1890ff; color: #1890ff; }
+.btn.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
+.btn.primary:hover { background: #40a9ff; }
+.btn.danger { color: #ff4d4f; border-color: #ff4d4f; }
+.btn.danger:hover { background: #ff4d4f; color: #fff; }
+.btn.small { padding: 3px 10px; font-size: 12px; }
+.btn-group { display: flex; gap: 6px; flex-wrap: wrap; }
+.form-row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+.form-row label { font-size: 13px; color: #666; min-width: 80px; }
+.form-row input, .form-row select, .form-row textarea { padding: 6px 10px; border: 1px solid #d9d9d9; border-radius: 4px; font-size: 13px; }
+.form-row input, .form-row select { height: 34px; }
+.form-row textarea { min-height: 60px; resize: vertical; }
+.form-row .field { display: flex; align-items: center; gap: 6px; }
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal { background: #fff; border-radius: 8px; width: 640px; max-height: 80vh; overflow-y: auto; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+.modal h3 { font-size: 16px; margin-bottom: 16px; }
+.modal .form-row input[type="text"], .modal .form-row input[type="number"], .modal .form-row select { width: 240px; }
+.modal .btn-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; }
+.toolbar { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+.alert-icon { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.alert-icon.new { background: #ff4d4f; }
+.alert-icon.ack { background: #52c41a; }
+.empty { padding: 40px; text-align: center; color: #999; }
+.engine-card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 20px; }
+.engine-card { border: 2px solid #e8e8e8; border-radius: 8px; padding: 14px; cursor: pointer; transition: all .2s; background: #fafafa; }
+.engine-card:hover { border-color: #91d5ff; background: #fff; }
+.engine-card.active { border-color: #1890ff; background: #e6f7ff; box-shadow: 0 2px 8px rgba(24,144,255,.15); }
+.engine-card .title { font-weight: 600; font-size: 14px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; }
+.engine-card .desc { font-size: 12px; color: #666; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useEffect, useRef, useCallback } = React;
+const BASE = (function() {
+  const p = window.location.pathname;
+  const i = p.indexOf('/apm');
+  if (i !== -1) {
+    return p.substring(0, i + 4);
+  }
+  const lastSlash = p.lastIndexOf('/');
+  return lastSlash > 0 ? p.substring(0, lastSlash) : '';
+})();
+
+const TIME_OPTIONS = [
+  {label:'15分钟',value:15},
+  {label:'30分钟',value:30},
+  {label:'1小时',value:60},
+  {label:'3小时',value:180},
+  {label:'6小时',value:360},
+  {label:'24小时',value:1440},
+];
+
+const RULE_TYPES = [
+  {value:'method_latency',label:'方法耗时'},
+  {value:'error_rate',label:'错误率'},
+  {value:'error_count',label:'错误数'},
+  {value:'calls_per_minute',label:'调用次数'},
+];
+
+const METRIC_FIELDS = [
+  {value:'avg_cost_ms',label:'平均耗时(ms)'},
+  {value:'max_cost_ms',label:'最大耗时(ms)'},
+  {value:'error_rate',label:'错误率(%)'},
+  {value:'error_count',label:'错误数'},
+  {value:'total_calls',label:'总调用数'},
+];
+
+const MATCH_TYPES = [
+  {value:'annotation', label:'注解匹配'},
+  {value:'class_name', label:'类名匹配'},
+  {value:'package_name',label:'包名匹配'},
+];
+
+const MATCH_TYPE_LABEL = {annotation:'注解', class_name:'类名', package_name:'包名'};
+
+const api = (path, opts) => {
+  const token = localStorage.getItem('LP_TOKEN') || '';
+  const customHeaders = (opts && opts.headers) || {};
+  const headers = Object.assign({
+    'Authorization': token ? ('Bearer ' + token) : '',
+    'X-Token': token
+  }, customHeaders);
+
+  return fetch(BASE + path, Object.assign({}, opts || {}, { headers }))
+    .then(r => {
+      if (r.status === 401) {
+        localStorage.removeItem('LP_TOKEN');
+        document.cookie = 'LP_TOKEN=; path=/; max-age=0';
+        window.location.replace(BASE + '/login.html');
+        return Promise.reject(new Error('未登录或登录已过期'));
+      }
+      return r.json();
+    });
+};
+
+function KPICards({ data }) {
+  const total = (data?.totalCalls || 0);
+  const errors = (data?.totalErrors || 0);
+  const errorRate = total > 0 ? ((errors/total)*100).toFixed(2) : '0.00';
+  return (
+    React.createElement('div', {className:'kpi-row'},
+      React.createElement('div',{className:'kpi-card'},
+        React.createElement('div',{className:'label'},'总调用次数'),
+        React.createElement('div',{className:'value blue'},total.toLocaleString())),
+      React.createElement('div',{className:'kpi-card'},
+        React.createElement('div',{className:'label'},'错误数'),
+        React.createElement('div',{className:'value '+(errors>0?'red':'green')},errors.toLocaleString())),
+      React.createElement('div',{className:'kpi-card'},
+        React.createElement('div',{className:'label'},'错误率'),
+        React.createElement('div',{className:'value '+(errorRate>1?'red':'green')},errorRate+'%')),
+      React.createElement('div',{className:'kpi-card'},
+        React.createElement('div',{className:'label'},'接口数'),
+        React.createElement('div',{className:'value blue'},(data?.endpoints?.length||0))))
+  );
+}
+
+function TrendChart({ data }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || !data?.length) return;
+    const chart = echarts.init(ref.current);
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      grid: { left: '3%', right: '4%', bottom: '3%', top: '5%', containLabel: true },
+      xAxis: { type: 'category', data: data.map(d=>d.t||''), axisLabel: { fontSize: 11 } },
+      yAxis: [
+        { type: 'value', name: 'TPS', nameTextStyle: { fontSize: 11 } },
+        { type: 'value', name: 'avg ms', nameTextStyle: { fontSize: 11 } }
+      ],
+      series: [
+        { name: 'TPS', type: 'bar', data: data.map(d=>d.calls||0), itemStyle: { color: '#1890ff' } },
+        { name: 'Avg Cost', type: 'line', yAxisIndex: 1, data: data.map(d=>Math.round(d.avg_cost||0)),
+          lineStyle: { color: '#ff4d4f' }, itemStyle: { color: '#ff4d4f' } }
+      ]
+    });
+    return () => chart.dispose();
+  }, [data]);
+  return React.createElement('div', {ref, className:'chart'});
+}
+
+function EndpointTable({ endpoints, onSelect }) {
+  if (!endpoints?.length) return React.createElement('div',{className:'empty'},'暂无数据');
+  const rows = endpoints.map((e,i) =>
+    React.createElement('tr',{key:i, onClick:()=>onSelect?.(e), style:{cursor:'pointer'}},
+      React.createElement('td',{},React.createElement('span',{className:'badge blue'},e.http_method||'ALL')),
+      React.createElement('td',{},e.class_name),
+      React.createElement('td',{},e.method_name),
+      React.createElement('td',{},e.calls?.toLocaleString()),
+      React.createElement('td',{},React.createElement('span',{className:e.errors>0?'badge red':'badge green'},e.errors||0)),
+      React.createElement('td',{},Math.round(e.avg_cost||0)+'ms'),
+      React.createElement('td',{},(e.max_cost||0)+'ms'))
+  );
+  return React.createElement('div',{className:'table-wrap'},
+    React.createElement('table',{},
+      React.createElement('thead',{},
+        React.createElement('tr',{},
+          ['方法','类','方法','调用','错误','平均','最大'].map(h=>React.createElement('th',{key:h},h)))),
+      React.createElement('tbody',{},...rows)));
+}
+
+// ====== 规则管理 ======
+
+function RuleEditModal({ rule, onSave, onClose }) {
+  const [form, setForm] = useState({
+    ruleName: '', appName: '*', ruleType: 'method_latency',
+    targetClass: '%', targetMethod: '%', metricField: 'max_cost_ms',
+    operator: '>', threshold: 3000, evalWindowMin: 5,
+    minSample: 1, enabled: true, description: '',
+    ...(rule||{})
+  });
+
+  const set = (k, v) => setForm(f=>({...f,[k]:v}));
+
+  const handleSave = () => {
+    const body = {...form};
+    // 清理特殊值
+    if (form.targetClass === '') body.targetClass = '%';
+    if (form.targetMethod === '') body.targetMethod = '%';
+    const url = rule?.id ? `/api/v1/rules/${rule.id}` : '/api/v1/rules';
+    const method = rule?.id ? 'PUT' : 'POST';
+    api(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).then(r => {
+      if (r.code === 200 || r.id) onSave();
+    });
+  };
+
+  return React.createElement('div',{className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&onClose()},
+    React.createElement('div',{className:'modal'},
+      React.createElement('h3',{}, rule?.id ? '编辑规则' : '新建规则'),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'规则名称'),
+        React.createElement('input',{type:'text', value:form.ruleName, onChange:e=>set('ruleName',e.target.value),
+          placeholder:'例如: 下单接口超时预警'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'应用'),
+        React.createElement('input',{type:'text', value:form.appName, onChange:e=>set('appName',e.target.value),
+          style:{width:120}, placeholder:'*=全局'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'规则类型'),
+        React.createElement('select',{value:form.ruleType, onChange:e=>set('ruleType',e.target.value)},
+          RULE_TYPES.map(t=>React.createElement('option',{key:t.value,value:t.value},t.label)))),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'目标类'),
+        React.createElement('input',{type:'text', value:form.targetClass, onChange:e=>set('targetClass',e.target.value),
+          placeholder:'支持 % 模糊匹配'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'目标方法'),
+        React.createElement('input',{type:'text', value:form.targetMethod, onChange:e=>set('targetMethod',e.target.value),
+          placeholder:'支持 % 模糊匹配'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'监控指标'),
+        React.createElement('select',{value:form.metricField, onChange:e=>set('metricField',e.target.value)},
+          METRIC_FIELDS.map(m=>React.createElement('option',{key:m.value,value:m.value},m.label)))),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('span',{className:'field'},
+          React.createElement('label',{style:{minWidth:'auto'}},'阈值'),
+          React.createElement('select',{value:form.operator, onChange:e=>set('operator',e.target.value),
+            style:{width:60}},
+            ['>','>=','<','<='].map(o=>React.createElement('option',{key:o,value:o},o))),
+          React.createElement('input',{type:'number', value:form.threshold,
+            onChange:e=>set('threshold',Number(e.target.value)), style:{width:120}}))),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'评估窗口'),
+        React.createElement('input',{type:'number', value:form.evalWindowMin,
+          onChange:e=>set('evalWindowMin',Number(e.target.value)), style:{width:80}}),
+        React.createElement('span',{style:{fontSize:12,color:'#999'}},'分钟')),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'最小采样数'),
+        React.createElement('input',{type:'number', value:form.minSample,
+          onChange:e=>set('minSample',Number(e.target.value)), style:{width:80}})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'规则描述'),
+        React.createElement('textarea',{value:form.description||'',
+          onChange:e=>set('description',e.target.value), style:{width:360}})),
+      React.createElement('div',{className:'btn-row'},
+        React.createElement('button',{className:'btn', onClick:onClose},'取消'),
+        React.createElement('button',{className:'btn primary', onClick:handleSave}, rule?.id?'保存':'创建'))));
+}
+
+function RulesTab() {
+  const [rules, setRules] = useState([]);
+  const [editingRule, setEditingRule] = useState(null);
+
+  const load = () => api('/api/v1/rules').then(setRules);
+  useEffect(() => { load(); }, []);
+
+  const toggle = (rule) => {
+    api(`/api/v1/rules/${rule.id}/toggle`, {method:'PUT'}).then(load);
+  };
+
+  const del = (rule) => {
+    if (!confirm(`确定删除规则「${rule.ruleName}」？`)) return;
+    api(`/api/v1/rules/${rule.id}`, {method:'DELETE'}).then(load);
+  };
+
+  const rows = (rules||[]).map(r =>
+    React.createElement('tr',{key:r.id},
+      React.createElement('td',{},r.ruleName),
+      React.createElement('td',{},React.createElement('span',{className:'badge blue'},r.appName)),
+      React.createElement('td',{},RULE_TYPES.find(t=>t.value===r.ruleType)?.label||r.ruleType),
+      React.createElement('td',{},r.targetClass||'%'),
+      React.createElement('td',{},r.targetMethod||'%'),
+      React.createElement('td',{},
+        METRIC_FIELDS.find(m=>m.value===r.metricField)?.label||r.metricField),
+      React.createElement('td',{},r.operator+' '+r.threshold),
+      React.createElement('td',{},r.evalWindowMin+'分钟'),
+      React.createElement('td',{},
+        React.createElement('span',{className:'badge '+(r.enabled?'green':'gray')},
+          r.enabled?'已启用':'已禁用')),
+      React.createElement('td',{},
+        React.createElement('div',{className:'btn-group'},
+          React.createElement('button',{className:'btn small', onClick:()=>setEditingRule(r)},'编辑'),
+          React.createElement('button',{className:'btn small '+(r.enabled?'':'primary'),
+            onClick:()=>toggle(r)}, r.enabled?'禁用':'启用'),
+          React.createElement('button',{className:'btn small danger', onClick:()=>del(r)},'删除'))))
+  );
+
+  return React.createElement('div',{},
+    React.createElement('div',{className:'toolbar'},
+      React.createElement('button',{className:'btn primary', onClick:()=>setEditingRule({})},'+ 新建规则')),
+    React.createElement('div',{className:'table-wrap'},
+      rows.length===0
+        ? React.createElement('div',{className:'empty'},'暂无自定义规则，点击上方按钮创建')
+        : React.createElement('table',{},
+            React.createElement('thead',{},
+              React.createElement('tr',{},
+                ['规则名称','应用','类型','目标类','目标方法','指标','阈值','窗口','状态','操作'].map(h=>
+                  React.createElement('th',{key:h},h)))),
+            React.createElement('tbody',{},...rows))),
+    editingRule && React.createElement(RuleEditModal,{
+      rule: editingRule?.id ? editingRule : null,
+      onSave: () => { setEditingRule(null); load(); },
+      onClose: () => setEditingRule(null)
+    }));
+}
+
+// ====== 采集策略 ======
+
+function CaptureConfigModal({ config, onSave, onClose }) {
+  const [form, setForm] = useState({
+    configName: '', appName: '*', matchType: 'annotation',
+    classMatch: 'org.springframework.web.bind.annotation.RestController',
+    methodMatch: '%', enabled: true, description: '',
+    ...(config||{})
+  });
+
+  const set = (k, v) => setForm(f=>({...f,[k]:v}));
+
+  const handleSave = () => {
+    const body = {...form};
+    const url = config?.id ? `/api/v1/capture-configs/${config.id}` : '/api/v1/capture-configs';
+    const method = config?.id ? 'PUT' : 'POST';
+    api(url, {method, headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}).then(r => {
+      if (r.code === 200 || r.id) onSave();
+    });
+  };
+
+  return React.createElement('div',{className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&onClose()},
+    React.createElement('div',{className:'modal'},
+      React.createElement('h3',{}, config?.id ? '编辑采集策略' : '新建采集策略'),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'策略名称'),
+        React.createElement('input',{type:'text', value:form.configName, onChange:e=>set('configName',e.target.value),
+          placeholder:'例如: 拦截所有 Controller'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'应用'),
+        React.createElement('input',{type:'text', value:form.appName, onChange:e=>set('appName',e.target.value),
+          style:{width:120}, placeholder:'*=全局'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'匹配类型'),
+        React.createElement('select',{value:form.matchType, onChange:e=>set('matchType',e.target.value)},
+          MATCH_TYPES.map(t=>React.createElement('option',{key:t.value,value:t.value},t.label)))),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'类匹配'),
+        React.createElement('input',{type:'text', value:form.classMatch, onChange:e=>set('classMatch',e.target.value),
+          style:{width:360}, placeholder:form.matchType==='annotation'?'注解全名':'支持 % 通配符'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'方法匹配'),
+        React.createElement('input',{type:'text', value:form.methodMatch, onChange:e=>set('methodMatch',e.target.value),
+          style:{width:360}, placeholder:'%=全部方法, 或注解全名/方法名(支持%)'})),
+      React.createElement('div',{className:'form-row'},
+        React.createElement('label',{},'描述'),
+        React.createElement('textarea',{value:form.description||'', onChange:e=>set('description',e.target.value),
+          style:{width:360}})),
+      React.createElement('div',{style:{padding:'8px 0',fontSize:12,color:'#888'}},
+        React.createElement('div',{},'匹配类型说明（类匹配和方法匹配均支持 % 通配符）：'),
+        React.createElement('div',{},'• 注解匹配 — 如 RestController、org.springframework.web.bind.annotation.*'),
+        React.createElement('div',{},'• 类名匹配 — 如 %Controller、com.example.biz.*Service'),
+        React.createElement('div',{},'• 包名匹配 — 如 com.example.service')),
+      React.createElement('div',{className:'btn-row'},
+        React.createElement('button',{className:'btn', onClick:onClose},'取消'),
+        React.createElement('button',{className:'btn primary', onClick:handleSave}, config?.id?'保存':'创建'))));
+}
+
+function CaptureConfigTab() {
+  const [list, setList] = useState([]);
+  const [editing, setEditing] = useState(null);
+
+  const load = () => api('/api/v1/capture-configs').then(setList);
+  useEffect(() => { load(); }, []);
+
+  const toggle = (item) => {
+    api(`/api/v1/capture-configs/${item.id}/toggle`, {method:'PUT'}).then(load);
+  };
+
+  const del = (item) => {
+    if (!confirm(`确定删除策略「${item.configName}」？`)) return;
+    api(`/api/v1/capture-configs/${item.id}`, {method:'DELETE'}).then(load);
+  };
+
+  const rows = (list||[]).map(r =>
+    React.createElement('tr',{key:r.id},
+      React.createElement('td',{},r.configName),
+      React.createElement('td',{},React.createElement('span',{className:'badge blue'},r.appName)),
+      React.createElement('td',{},MATCH_TYPE_LABEL[r.matchType]||r.matchType),
+      React.createElement('td',{style:{fontFamily:'monospace',fontSize:12}},r.classMatch),
+      React.createElement('td',{style:{fontFamily:'monospace',fontSize:12}},r.methodMatch||'%'),
+      React.createElement('td',{},
+        React.createElement('span',{className:'badge '+(r.enabled?'green':'gray')},
+          r.enabled?'已启用':'已禁用')),
+      React.createElement('td',{},r.description||'-'),
+      React.createElement('td',{},
+        React.createElement('div',{className:'btn-group'},
+          React.createElement('button',{className:'btn small', onClick:()=>setEditing(r)},'编辑'),
+          React.createElement('button',{className:'btn small '+(r.enabled?'':'primary'),
+            onClick:()=>toggle(r)}, r.enabled?'禁用':'启用'),
+          React.createElement('button',{className:'btn small danger', onClick:()=>del(r)},'删除'))))
+  );
+
+  return React.createElement('div',{},
+    React.createElement('div',{className:'toolbar'},
+      React.createElement('button',{className:'btn primary', onClick:()=>setEditing({})},'+ 新建策略')),
+    React.createElement('div',{className:'table-wrap'},
+      rows.length===0
+        ? React.createElement('div',{className:'empty'},'暂无采集策略，点击上方按钮创建')
+        : React.createElement('table',{},
+            React.createElement('thead',{},React.createElement('tr',{},
+              ['策略名称','应用','匹配类型','类匹配','方法匹配','状态','描述','操作'].map(h=>
+                React.createElement('th',{key:h},h)))),
+            React.createElement('tbody',{},...rows))),
+    editing && React.createElement(CaptureConfigModal,{
+      config: editing?.id ? editing : null,
+      onSave: () => { setEditing(null); load(); },
+      onClose: () => setEditing(null)
+    }));
+}
+
+// ====== 告警记录 (支持真实分页与状态筛选) ======
+
+function AlertsTab() {
+  const [data, setData] = useState({records:[], total:0});
+  const [filter, setFilter] = useState(0); // 0: 待确认, 1: 已确认, -1: 全部
+  const [page, setPage] = useState(1);
+  const pageSize = 15;
+
+  const load = useCallback(() => {
+    api(`/api/v1/alerts?acknowledged=${filter}&page=${page}&size=${pageSize}`).then(res => {
+      setData(res || {records:[], total:0});
+    });
+  }, [filter, page]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const ack = (alert) => {
+    api(`/api/v1/alerts/${alert.id}/ack`, {method:'PUT'}).then(load);
+  };
+
+  const removeAlert = (alert) => {
+    if (confirm('确认删除该条告警记录？')) {
+      api(`/api/v1/alerts/${alert.id}`, {method:'DELETE'}).then(load);
+    }
+  };
+
+  const cleanAcked = () => {
+    if (confirm('确认清空所有【已确认】的历史告警？\n\n（未确认的实时告警将完整保留）')) {
+      api('/api/v1/alerts/clean-acked', {method:'DELETE'}).then(res => {
+        alert(res.message || '清理完成！');
+        load();
+      });
+    }
+  };
+
+  const ackAll = () => {
+    if (confirm('确认一键确认全部待处理告警？')) {
+      api('/api/v1/alerts/ack-all', { method:'PUT' }).then(() => {
+        load();
+      });
+    }
+  };
+
+  const totalPages = Math.max(1, Math.ceil((data.total || 0) / pageSize));
+
+  const rows = (data.records||[]).map(a =>
+    React.createElement('tr',{key:a.id},
+      React.createElement('td',{},
+        React.createElement('span',{className:'alert-icon '+(a.acknowledged?'ack':'new')})),
+      React.createElement('td',{style:{fontWeight:600}}, a.ruleName || '容量/健康预警'),
+      React.createElement('td',{},React.createElement('span',{className:'badge blue'}, a.appName || '系统')),
+      React.createElement('td',{},
+        React.createElement('span',{className:'badge '+(a.alertType==='CRITICAL' || a.currentValue>=a.threshold?'red':'orange')},
+          a.alertType || 'WARN')),
+      React.createElement('td',{}, a.targetClass || a.targetMethod || '-'),
+      React.createElement('td',{}, (a.operator||'>=') + ' ' + (a.threshold!=null?a.threshold:'-')),
+      React.createElement('td',{}, React.createElement('strong',{}, a.currentValue!=null ? Number(a.currentValue).toFixed(1) : '-')),
+      React.createElement('td',{style:{maxWidth:320,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}, title: a.message},
+        a.message),
+      React.createElement('td',{}, dayjs(a.triggeredAt).format('YYYY-MM-DD HH:mm:ss')),
+      React.createElement('td',{},
+        React.createElement('div', {style:{display:'flex',gap:6,alignItems:'center'}},
+          !a.acknowledged
+            ? React.createElement('button',{className:'btn small primary', onClick:()=>ack(a)},'标记恢复/确认')
+            : React.createElement('span',{style:{fontSize:12,color:'#52c41a'}},'已确认'),
+          React.createElement('button',{className:'btn small', style:{color:'#ff4d4f',padding:'2px 6px',fontSize:11}, title:'删除该条记录', onClick:()=>removeAlert(a)}, '🗑️')
+        ))
+    )
+  );
+
+  return React.createElement('div',{},
+    React.createElement('div',{className:'toolbar', style:{justifyContent:'space-between'}},
+      React.createElement('div',{style:{display:'flex',gap:8,alignItems:'center'}},
+        React.createElement('div',{className:'btn-group'},
+          React.createElement('button',{
+            className:'btn small' + (filter===0 ? ' primary' : ''),
+            onClick:()=>{setFilter(0); setPage(1);}
+          }, '待处理告警'),
+          React.createElement('button',{
+            className:'btn small' + (filter===-1 ? ' primary' : ''),
+            onClick:()=>{setFilter(-1); setPage(1);}
+          }, '全部历史告警'),
+          React.createElement('button',{
+            className:'btn small' + (filter===1 ? ' primary' : ''),
+            onClick:()=>{setFilter(1); setPage(1);}
+          }, '已确认告警')
+        ),
+        React.createElement('span',{style:{fontSize:13,color:'#666',marginLeft:8}},
+          `共 ${data.total || 0} 条`)),
+      React.createElement('div',{style:{display:'flex',gap:8}},
+        React.createElement('button',{className:'btn small', onClick:load}, '🔄 刷新'),
+        React.createElement('button',{className:'btn small', onClick:cleanAcked, title:'安全清理已确认的历史告警'}, '🧹 清空已确认'),
+        React.createElement('button',{className:'btn small primary', onClick:ackAll}, '一键全部确认'))
+    ),
+    React.createElement('div',{className:'table-wrap'},
+      rows.length===0
+        ? React.createElement('div',{className:'empty'},'暂无告警记录')
+        : React.createElement('table',{},
+            React.createElement('thead',{},
+              React.createElement('tr',{},
+                ['状态','告警事件','应用/来源','等级','监控对象','预警阈值','触发数值','告警原因','发生时间','操作'].map(h=>
+                  React.createElement('th',{key:h},h)))),
+            React.createElement('tbody',{},...rows))
+    ),
+    React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:12,padding:'8px 4px',fontSize:13,color:'#666'}},
+      React.createElement('span',{}, `第 ${page} / ${totalPages} 页 (每页 ${pageSize} 条)`),
+      React.createElement('div',{style:{display:'flex',gap:8}},
+        React.createElement('button',{
+          className:'btn small',
+          disabled: page <= 1,
+          onClick:()=>setPage(p=>Math.max(1, p-1))
+        }, '◀ 上一页'),
+        React.createElement('button',{
+          className:'btn small',
+          disabled: page >= totalPages,
+          onClick:()=>setPage(p=>Math.min(totalPages, p+1))
+        }, '下一页 ▶'))
+    )
+  );
+}
+
+// ====== 慢 SQL ======
+
+function SlowSqlTab() {
+  const [list, setList] = useState([]);
+  useEffect(() => { api('/api/v1/apps/demo-app/slow-sql').then(setList); }, []);
+  const rows = (list||[]).map(s =>
+    React.createElement('tr',{key:s.id},
+      React.createElement('td',{},s.sqlText?.substring(0,80)+(s.sqlText?.length>80?'...':'')),
+      React.createElement('td',{},s.costMs+'ms'),
+      React.createElement('td',{},s.datasourceUrl||'-'),
+      React.createElement('td',{},dayjs(s.occurredAt).format('MM-DD HH:mm'))));
+  return React.createElement('div',{},
+    React.createElement('div',{className:'table-wrap'},
+      rows.length===0
+        ? React.createElement('div',{className:'empty'},'暂无慢 SQL 记录')
+        : React.createElement('table',{},
+            React.createElement('thead',{},React.createElement('tr',{},
+              ['SQL','耗时','数据源','时间'].map(h=>React.createElement('th',{key:h},h)))),
+            React.createElement('tbody',{},...rows))));
+}
+
+// ====== 异常 ======
+
+// ====== 异常 ======
+
+function ExceptionsTab() {
+  const [list, setList] = useState([]);
+  useEffect(() => { api('/api/v1/apps/demo-app/exceptions').then(setList); }, []);
+  const rows = (list||[]).map(e =>
+    React.createElement('tr',{key:e.id},
+      React.createElement('td',{},e.exceptionType),
+      React.createElement('td',{},e.message?.substring(0,60)),
+      React.createElement('td',{},e.className+'.'+e.methodName),
+      React.createElement('td',{},e.occurrenceCount+'次'),
+      React.createElement('td',{},dayjs(e.lastSeen).format('MM-DD HH:mm'))));
+  return React.createElement('div',{},
+    React.createElement('div',{className:'table-wrap'},
+      rows.length===0
+        ? React.createElement('div',{className:'empty'},'暂无异常记录')
+        : React.createElement('table',{},
+            React.createElement('thead',{},React.createElement('tr',{},
+              ['异常类型','消息','发生位置','次数','最后出现'].map(h=>React.createElement('th',{key:h},h)))),
+            React.createElement('tbody',{},...rows))));
+}
+
+// ====== 主机性能与容量（分组折叠版） ======
+function HostSystemTab() {
+  const [hosts, setHosts] = useState([]);
+  const [searchText, setSearchText] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+  const [expandedDisks, setExpandedDisks] = useState({});
+
+  const load = () => {
+    api('/api/v1/system-metrics/hosts').then(r => setHosts(r?.data || []));
+  };
+  useEffect(() => { load(); const timer = setInterval(load, 10000); return () => clearInterval(timer); }, []);
+
+  const formatBytes = (b) => {
+    if (!b) return '0 B';
+    const gb = (b / (1024*1024*1024)).toFixed(1);
+    return gb + ' GB';
+  };
+
+  const parseDisks = (str) => {
+    try {
+      if (!str) return [];
+      if (str.startsWith('[')) {
+        const clean = str.replace(/([a-zA-Z0-9_]+)=/g, '"$1":');
+        const list = JSON.parse(clean);
+        return list.filter(d => (d.totalBytes || d.totalSpace || 0) > 0);
+      }
+    } catch(e) {}
+    return [];
+  };
+
+  const handleCleanTestData = () => {
+    if (confirm('确认清空所有历史主机指标、测试告警与探活流水？\n\n【注意】已配置的接口探针、校验组、账号以及 ES 数据源配置将完整保留不受影响。')) {
+      api('/api/setup/clean-test-data', {method: 'POST'}).then(res => {
+        alert(res.message || '清理完成！');
+        load();
+      }).catch(err => {
+        alert('清理失败: ' + err.message);
+      });
+    }
+  };
+
+  const handleRemoveHost = (h) => {
+    if (confirm(`确认移除主机【${h.hostName}】(${h.ipAddress || ''}) 的所有监控数据？\n\n该操作仅清除该节点指标，不会影响其它正常运行的主机！`)) {
+      const params = new URLSearchParams();
+      if (h.appName) params.append('appName', h.appName);
+      if (h.hostName) params.append('hostName', h.hostName);
+      if (h.ipAddress) params.append('ipAddress', h.ipAddress);
+      api(`/api/v1/system-metrics/host?${params.toString()}`, { method: 'DELETE' }).then(res => {
+        alert(res.message || '移除成功！');
+        load();
+      }).catch(err => {
+        alert('移除失败: ' + err.message);
+      });
+    }
+  };
+
+  const onlineHosts = (hosts || []).filter(h => dayjs().diff(dayjs(h.createdAt), 'second') <= 90);
+  const onlineCount = onlineHosts.length;
+
+  const avgCpu = onlineCount > 0 ? (onlineHosts.reduce((acc, h) => acc + (h.systemCpuLoad || 0), 0) / onlineCount).toFixed(1) : (hosts.length > 0 ? (hosts.reduce((acc, h) => acc + (h.systemCpuLoad || 0), 0) / hosts.length).toFixed(1) : '0.0');
+  const avgMem = onlineCount > 0 ? (onlineHosts.reduce((acc, h) => acc + (h.memoryUsedPercent || 0), 0) / onlineCount).toFixed(1) : (hosts.length > 0 ? (hosts.reduce((acc, h) => acc + (h.memoryUsedPercent || 0), 0) / hosts.length).toFixed(1) : '0.0');
+
+  // 搜索过滤
+  const filtered = (hosts || []).filter(h => {
+    if (!searchText) return true;
+    const q = searchText.toLowerCase();
+    return (h.appName && h.appName.toLowerCase().includes(q))
+      || (h.hostName && h.hostName.toLowerCase().includes(q))
+      || (h.ipAddress && h.ipAddress.toLowerCase().includes(q));
+  });
+
+  // 按服务名 (appName) 分组
+  const grouped = {};
+  filtered.forEach(h => {
+    const key = h.appName || '未分类服务';
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(h);
+  });
+
+  const groupKeys = Object.keys(grouped).sort();
+
+  const toggleGroup = (key) => {
+    setCollapsedGroups(prev => ({...prev, [key]: !prev[key]}));
+  };
+
+  const expandAll = () => setCollapsedGroups({});
+  const collapseAll = () => {
+    const all = {};
+    groupKeys.forEach(k => { all[k] = true; });
+    setCollapsedGroups(all);
+  };
+
+  const toggleDiskExpand = (rowKey) => {
+    setExpandedDisks(prev => ({...prev, [rowKey]: !prev[rowKey]}));
+  };
+
+  const renderHostRow = (h) => {
+    const isOnline = dayjs().diff(dayjs(h.createdAt), 'second') <= 90;
+    const dotColor = isOnline ? '#52c41a' : '#8c8c8c';
+    const cpuClass = h.systemCpuLoad > 85 ? 'red' : (h.systemCpuLoad > 60 ? 'orange' : 'green');
+    const cpuBarColor = h.systemCpuLoad > 85 ? '#ff4d4f' : (h.systemCpuLoad > 60 ? '#fa8c16' : '#52c41a');
+    const memClass = h.memoryUsedPercent > 85 ? 'red' : (h.memoryUsedPercent > 60 ? 'orange' : 'green');
+    const memBarColor = h.memoryUsedPercent > 85 ? '#ff4d4f' : (h.memoryUsedPercent > 60 ? '#fa8c16' : '#1890ff');
+
+    const rowKey = `${h.id || ''}_${h.appName || ''}_${h.hostName || ''}_${h.ipAddress || ''}`;
+    const allDisks = parseDisks(h.diskDetails);
+    const isDisksExpanded = !!expandedDisks[rowKey];
+    const visibleDisks = isDisksExpanded ? allDisks : allDisks.slice(0, 3);
+
+    return React.createElement('tr', { key: rowKey, style: isOnline ? {} : {opacity: 0.65, background: '#fafafa'} },
+      React.createElement('td', {},
+        React.createElement('div', {style:{display:'flex',alignItems:'center',gap:6}},
+          React.createElement('span', {style:{display:'inline-block',width:8,height:8,borderRadius:'50%',background:dotColor}}),
+          React.createElement('strong', {style:{color: isOnline ? '#000' : '#666'}}, h.hostName),
+          !isOnline && React.createElement('span', {className:'badge gray', style:{fontSize:10,padding:'1px 5px',background:'#f0f0f0'}}, '已失联/离线')),
+        React.createElement('div', {style:{fontSize:11,color:'#888',marginLeft:14}}, h.ipAddress)),
+      React.createElement('td', {}, React.createElement('span', {className:'badge blue'}, h.appName)),
+      React.createElement('td', {}, React.createElement('span', {className:'badge gray'}, h.env || 'prod')),
+      React.createElement('td', {},
+        React.createElement('div', {style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:3}},
+          React.createElement('span', {className:'badge ' + cpuClass}, (h.systemCpuLoad || 0) + '%')),
+        React.createElement('div', {style:{width:80,height:4,background:'#f0f0f0',borderRadius:2,overflow:'hidden'}},
+          React.createElement('div', {style:{width:Math.min(100, Math.max(0, h.systemCpuLoad||0))+'%',height:'100%',background:cpuBarColor}}))),
+      React.createElement('td', {},
+        React.createElement('div', {style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:3}},
+          React.createElement('span', {className:'badge ' + memClass}, (h.memoryUsedPercent || 0) + '%')),
+        React.createElement('div', {style:{width:80,height:4,background:'#f0f0f0',borderRadius:2,overflow:'hidden'}},
+          React.createElement('div', {style:{width:Math.min(100, Math.max(0, h.memoryUsedPercent||0))+'%',height:'100%',background:memBarColor}})),
+        React.createElement('div', {style:{fontSize:11,color:'#888',marginTop:3}}, `${formatBytes(h.totalPhysicalMemory - h.freePhysicalMemory)} / ${formatBytes(h.totalPhysicalMemory)}`)),
+      React.createElement('td', {},
+        allDisks.length === 0 ? '-' : React.createElement('div', {},
+          visibleDisks.map((d, idx) => {
+            const dClass = d.usedPercent > 88 ? 'red' : (d.usedPercent > 70 ? 'orange' : 'green');
+            const dBarColor = d.usedPercent > 88 ? '#ff4d4f' : (d.usedPercent > 70 ? '#fa8c16' : '#52c41a');
+            return React.createElement('div', {key: idx, style:{marginBottom: 4}},
+              React.createElement('div', {style:{display:'flex',alignItems:'center',gap:6,marginBottom:1}},
+                React.createElement('span', {style:{fontWeight:500,fontSize:11,maxWidth:220,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'inline-block'}, title:d.path}, d.path),
+                React.createElement('span', {className: 'badge ' + dClass, style:{fontSize:10,padding:'0 4px'}}, d.usedPercent + '%'),
+                React.createElement('span', {style:{fontSize:10,color:'#888'}}, `${formatBytes(d.totalBytes - d.usableBytes)} / ${formatBytes(d.totalBytes)}`)),
+              React.createElement('div', {style:{width:120,height:3,background:'#f0f0f0',borderRadius:2,overflow:'hidden'}},
+                React.createElement('div', {style:{width:Math.min(100, Math.max(0, d.usedPercent||0))+'%',height:'100%',background:dBarColor}})));
+          }),
+          allDisks.length > 3 && React.createElement('a', {
+            style: {fontSize: 11, color: '#3b82f6', cursor: 'pointer', display: 'inline-block', marginTop: 3},
+            onClick: (e) => { e.stopPropagation(); toggleDiskExpand(rowKey); }
+          }, isDisksExpanded ? '▲ 收起挂载点' : `▼ 展开全部 (${allDisks.length}个挂载点)`)
+        )
+      ),
+      React.createElement('td', {}, Math.floor((h.uptimeSeconds || 0) / 3600) + '小时'),
+      React.createElement('td', {}, dayjs(h.createdAt).format('MM-DD HH:mm:ss')),
+      React.createElement('td', {},
+        React.createElement('button', {
+          className: 'btn small',
+          style: { color: '#ff4d4f', padding: '2px 8px', fontSize: 11 },
+          title: '精准移除此节点（如本地开发机或废弃节点）',
+          onClick: () => handleRemoveHost(h)
+        }, '🗑️ 移除'))
+    );
+  };
+
+  return React.createElement('div', {},
+    // 顶部统计看板卡片
+    React.createElement('div', {style:{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(210px, 1fr))',gap:14,marginBottom:18}},
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '🖥️ 活跃在线主机'),
+        React.createElement('div', {style:{fontSize:24,fontWeight:700,color:onlineCount>0?'#10b981':'#8c8c8c',marginTop:4}}, onlineCount, React.createElement('span', {style:{fontSize:12,fontWeight:400,color:'#64748b',marginLeft:4}}, '台')),
+        React.createElement('div', {style:{fontSize:11,color:onlineCount>0?'#10b981':'#8c8c8c',marginTop:4}}, onlineCount>0?'✓ 实时心跳健康':(hosts.length>0?`共${hosts.length}台(均已离线)`:'等待Agent接入'))),
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '⚡ 平均系统 CPU'),
+        React.createElement('div', {style:{fontSize:24,fontWeight:700,color:Number(avgCpu)>80?'#ff4d4f':'#0f172a',marginTop:4}}, avgCpu, React.createElement('span', {style:{fontSize:12,fontWeight:400,color:'#64748b',marginLeft:4}}, '%')),
+        React.createElement('div', {style:{fontSize:11,color:Number(avgCpu)>80?'#ff4d4f':'#10b981',marginTop:4}}, Number(avgCpu)>80?'⚠️ 算力负载偏高':'✓ 运算负荷平稳')),
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '💾 平均物理内存使用'),
+        React.createElement('div', {style:{fontSize:24,fontWeight:700,color:Number(avgMem)>85?'#ff4d4f':'#0f172a',marginTop:4}}, avgMem, React.createElement('span', {style:{fontSize:12,fontWeight:400,color:'#64748b',marginLeft:4}}, '%')),
+        React.createElement('div', {style:{fontSize:11,color:Number(avgMem)>85?'#ff4d4f':'#10b981',marginTop:4}}, Number(avgMem)>85?'⚠️ 内存容量吃紧':'✓ 处于安全区间')),
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '📦 全盘挂载点容量'),
+        React.createElement('div', {style:{fontSize:20,fontWeight:700,color:'#10b981',marginTop:6}}, '分区全覆盖'),
+        React.createElement('div', {style:{fontSize:11,color:'#64748b',marginTop:4}}, '每 10 秒原生动态巡检'))
+    ),
+
+    React.createElement('div', {className:'toolbar', style:{justifyContent:'space-between',flexWrap:'wrap',gap:10}},
+      React.createElement('div', {style:{display:'flex',alignItems:'center',gap:12}},
+        React.createElement('h3', {style:{margin:0}}, '🖥️ 服务器主机集群看板'),
+        React.createElement('span', {className:'badge gray', style:{fontSize:12}}, `共 ${groupKeys.length} 个服务分组 / ${hosts.length} 台主机`)
+      ),
+      React.createElement('div', {style:{display:'flex',gap:8,alignItems:'center'}},
+        React.createElement('input', {
+          type: 'text',
+          placeholder: '🔍 搜索服务/主机名/IP...',
+          value: searchText,
+          onChange: (e) => setSearchText(e.target.value),
+          style: {padding: '4px 10px', fontSize: 12, border: '1px solid #cbd5e1', borderRadius: 4, width: 180}
+        }),
+        React.createElement('button', {className:'btn small', onClick:expandAll, title:'展开所有分组'}, '📂 全部展开'),
+        React.createElement('button', {className:'btn small', onClick:collapseAll, title:'收缩所有分组'}, '📁 全部收起'),
+        React.createElement('button', {className:'btn small danger', onClick:handleCleanTestData, title:'一键清空所有机器的历史指标、告警与流水数据'}, '🧹 清空测试数据'),
+        React.createElement('button', {className:'btn small', onClick:load}, '🔄 刷新')
+      )
+    ),
+
+    // 分组卡片列表
+    groupKeys.length === 0
+      ? React.createElement('div', {className:'empty', style:{marginTop:14}}, '暂无匹配的主机上报数据')
+      : groupKeys.map(gKey => {
+          const list = grouped[gKey];
+          const isCollapsed = !!collapsedGroups[gKey];
+          const gOnline = list.filter(h => dayjs().diff(dayjs(h.createdAt), 'second') <= 90);
+          const gAvgCpu = gOnline.length > 0 ? (gOnline.reduce((acc, h) => acc + (h.systemCpuLoad || 0), 0) / gOnline.length).toFixed(1) : '0.0';
+          const gAvgMem = gOnline.length > 0 ? (gOnline.reduce((acc, h) => acc + (h.memoryUsedPercent || 0), 0) / gOnline.length).toFixed(1) : '0.0';
+
+          return React.createElement('div', {key: gKey, style:{marginBottom: 14, border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.03)'}},
+            // 分组卡片 Header
+            React.createElement('div', {
+              style: {
+                background: isCollapsed ? '#f8fafc' : '#f1f5f9',
+                padding: '10px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+                userSelect: 'none',
+                borderBottom: isCollapsed ? 'none' : '1px solid #e2e8f0',
+                transition: 'background 0.2s ease'
+              },
+              onClick: () => toggleGroup(gKey)
+            },
+              React.createElement('div', {style:{display:'flex',alignItems:'center',gap:10}},
+                React.createElement('span', {
+                  style: {
+                    fontSize: 12,
+                    color: '#64748b',
+                    display: 'inline-block',
+                    transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+                    transition: 'transform 0.2s ease'
+                  }
+                }, '▼'),
+                React.createElement('span', {style:{fontSize: 15, fontWeight: 700, color: '#0f172a'}}, gKey),
+                React.createElement('span', {className:'badge blue', style:{fontSize:11}}, `${list.length} 台主机`),
+                React.createElement('span', {
+                  className: 'badge ' + (gOnline.length === list.length ? 'green' : 'orange'),
+                  style: {fontSize: 11}
+                }, `${gOnline.length} 在线` + (list.length > gOnline.length ? ` (${list.length - gOnline.length} 离线)` : ''))
+              ),
+              React.createElement('div', {style:{display:'flex',alignItems:'center',gap:14,fontSize:12,color:'#64748b'}},
+                React.createElement('span', {}, `⚡ 组内平均CPU: ${gAvgCpu}%`),
+                React.createElement('span', {}, `💾 组内平均内存: ${gAvgMem}%`),
+                React.createElement('span', {style:{color:'#2563eb',fontWeight:600,fontSize:12}}, isCollapsed ? '点击展开 ▾' : '收起分组 ▴')
+              )
+            ),
+            // 分组表格内容
+            !isCollapsed && React.createElement('div', {className:'table-wrap', style:{margin:0, border:'none', borderRadius:0}},
+              React.createElement('table', {},
+                React.createElement('thead', {}, React.createElement('tr', {},
+                  ['主机名 / IP', '所属服务', '环境', '系统 CPU', '物理内存', '各挂载点磁盘容量', '运行时长', '最近上报', '操作'].map(th => React.createElement('th', {key:th}, th)))),
+                React.createElement('tbody', {}, list.map(renderHostRow))))
+          );
+        })
+  );
+}
+
+// ====== 接口巡检与校验组（Token/鉴权共享） ======
+function ProbesTab() {
+  const [subTab, setSubTab] = useState('groups'); // 'groups' | 'probes' | 'records'
+  const [groups, setGroups] = useState([]);
+  const [probes, setProbes] = useState([]);
+  const [recordsData, setRecordsData] = useState({ data: [], total: 0 });
+  const [recordPage, setRecordPage] = useState(1);
+  const [recordFilter, setRecordFilter] = useState(-1); // -1 全部, 0 仅失败, 1 仅成功
+  const recordPageSize = 15;
+
+  // 校验组表单状态
+  const emptyGroupForm = {
+    groupName: '', appName: '*', dispatchMode: 'CLUSTER_SINGLE', authType: 'DYNAMIC_LOGIN',
+    loginUrl: 'http://127.0.0.1:8080/api/chatbot/kmsLogin/externalLogin', loginMethod: 'POST',
+    loginBody: '{\n  "workNo": "WB-4830",\n  "secret": "kkjvnio2r32490vk^43gan#4*@456nn"\n}',
+    tokenPath: 'result.accessToken', headerName: 'accessToken', tokenPrefix: '',
+    staticHeaderName: 'Authorization', staticHeaderValue: '',
+    expiresInHours: 4, refreshBufferSeconds: 300,
+    defaultIntervalSeconds: 3600, defaultTimeoutMs: 30000,
+    enabled: 1,
+    description: ''
+  };
+  const [showGroupModal, setShowGroupModal] = useState(false);
+  const [groupForm, setGroupForm] = useState(emptyGroupForm);
+  const [editingGroupId, setEditingGroupId] = useState(null);
+
+  // 探针接口表单状态 (默认加入就启用 enabled=1)
+  const emptyProbeForm = {
+    groupId: '', probeName: '', appName: '*', dispatchMode: 'CLUSTER_SINGLE', targetUrl: '', httpMethod: 'GET',
+    requestHeaders: '', requestBody: '',
+    authType: 'NONE',
+    staticHeaderName: 'Authorization', staticHeaderValue: '',
+    loginUrl: '', loginMethod: 'POST', loginBody: '',
+    tokenPath: 'result.accessToken', headerName: 'accessToken', tokenPrefix: '',
+    intervalSeconds: 3600, timeoutMs: 30000,
+    assertStatusCode: 200, assertBodyContains: '',
+    enabled: 1
+  };
+  const [showProbeModal, setShowProbeModal] = useState(false);
+  const [probeForm, setProbeForm] = useState(emptyProbeForm);
+  const [editingProbeId, setEditingProbeId] = useState(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const loadGroups = useCallback(() => {
+    api('/api/v1/probe-groups').then(r => setGroups(r?.data || []));
+  }, []);
+
+  const loadProbes = useCallback(() => {
+    api('/api/v1/probes').then(r => setProbes(r?.data || []));
+  }, []);
+
+  const loadRecords = useCallback(() => {
+    let url = `/api/v1/probes/records?page=${recordPage}&size=${recordPageSize}`;
+    if (recordFilter >= 0) url += `&isSuccess=${recordFilter}`;
+    api(url).then(r => setRecordsData(r || { data: [], total: 0 }));
+  }, [recordPage, recordFilter]);
+
+  useEffect(() => {
+    loadGroups();
+    loadProbes();
+  }, [loadGroups, loadProbes]);
+
+  useEffect(() => {
+    loadRecords();
+    const timer = setInterval(loadRecords, 15000);
+    return () => clearInterval(timer);
+  }, [loadRecords]);
+
+  // --- 校验组操作 ---
+  const handleToggleGroup = (id) => {
+    api(`/api/v1/probe-groups/${id}/toggle`, {method: 'POST'}).then(() => {
+      loadGroups();
+      loadProbes();
+    });
+  };
+
+  const handleToggleProbe = (id) => {
+    api(`/api/v1/probes/${id}/toggle`, {method: 'POST'}).then(() => {
+      loadProbes();
+    });
+  };
+
+  const handleOpenCreateGroup = () => {
+    setEditingGroupId(null);
+    setGroupForm({...emptyGroupForm, enabled: 1});
+    setShowGroupModal(true);
+  };
+
+  const handleOpenEditGroup = (g) => {
+    setEditingGroupId(g.id);
+    setGroupForm({
+      ...emptyGroupForm,
+      ...g,
+      enabled: g.enabled !== undefined ? g.enabled : 1,
+      defaultTimeoutMs: g.defaultTimeoutMs || 30000,
+      dispatchMode: g.dispatchMode || 'CLUSTER_SINGLE',
+      expiresInHours: g.expiresInSeconds ? Math.round(g.expiresInSeconds / 3600) : 4,
+      loginMethod: g.loginMethod || 'POST',
+      tokenPath: g.tokenPath || 'result.accessToken',
+      headerName: g.headerName || 'accessToken',
+      tokenPrefix: g.tokenPrefix !== undefined ? g.tokenPrefix : ''
+    });
+    setShowGroupModal(true);
+  };
+
+  const handleSaveGroup = () => {
+    if (!groupForm.groupName) {
+      alert('请填写校验组名称');
+      return;
+    }
+    const payload = {
+      ...groupForm,
+      enabled: groupForm.enabled !== undefined ? Number(groupForm.enabled) : 1,
+      defaultTimeoutMs: Number(groupForm.defaultTimeoutMs) || 30000,
+      defaultIntervalSeconds: Number(groupForm.defaultIntervalSeconds) || 3600,
+      expiresInSeconds: (Number(groupForm.expiresInHours) || 4) * 3600
+    };
+    const method = editingGroupId ? 'PUT' : 'POST';
+    const url = editingGroupId ? `/api/v1/probe-groups/${editingGroupId}` : '/api/v1/probe-groups';
+    api(url, {
+      method,
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    }).then(() => {
+      setShowGroupModal(false);
+      loadGroups();
+      loadProbes();
+    });
+  };
+
+  const handleDeleteGroup = (id) => {
+    if (confirm('确认删除该接口校验组？组内接口将被转为独立接口。')) {
+      api(`/api/v1/probe-groups/${id}`, {method: 'DELETE'}).then(() => {
+        loadGroups();
+        loadProbes();
+      });
+    }
+  };
+
+  // --- 探针操作 ---
+  const handleOpenCreateProbe = (preselectedGroupId) => {
+    setEditingProbeId(null);
+    let initial = {...emptyProbeForm, enabled: 1};
+    if (preselectedGroupId) {
+      initial.groupId = preselectedGroupId;
+      const g = groups.find(x => x.id === preselectedGroupId);
+      if (g) {
+        initial.appName = g.appName || '*';
+        initial.dispatchMode = g.dispatchMode || 'CLUSTER_SINGLE';
+        initial.intervalSeconds = g.defaultIntervalSeconds || 3600;
+        initial.timeoutMs = g.defaultTimeoutMs || 30000;
+      }
+    }
+    setProbeForm(initial);
+    setShowAdvanced(false);
+    setShowProbeModal(true);
+  };
+
+  const handleOpenEditProbe = (p) => {
+    setEditingProbeId(p.id);
+    setProbeForm({
+      ...emptyProbeForm,
+      ...p,
+      enabled: p.enabled !== undefined ? p.enabled : 1,
+      timeoutMs: p.timeoutMs || 30000,
+      groupId: p.groupId ? String(p.groupId) : '',
+      dispatchMode: p.dispatchMode || 'CLUSTER_SINGLE',
+      staticHeaderName: p.staticHeaderName || 'Authorization',
+      headerName: p.headerName || 'accessToken',
+      tokenPath: p.tokenPath || 'result.accessToken',
+      tokenPrefix: p.tokenPrefix !== undefined ? p.tokenPrefix : '',
+      loginMethod: p.loginMethod || 'POST'
+    });
+    setShowAdvanced(!!(p.requestBody || p.requestHeaders));
+    setShowProbeModal(true);
+  };
+
+  const handleSaveProbe = () => {
+    if (!probeForm.probeName || !probeForm.targetUrl) {
+      alert('请填写探针名称和目标 URL');
+      return;
+    }
+    const payload = {
+      ...probeForm,
+      enabled: probeForm.enabled !== undefined ? Number(probeForm.enabled) : 1,
+      timeoutMs: (probeForm.timeoutMs !== '' && probeForm.timeoutMs != null) ? Number(probeForm.timeoutMs) : 30000,
+      intervalSeconds: (probeForm.intervalSeconds !== '' && probeForm.intervalSeconds != null) ? Number(probeForm.intervalSeconds) : 3600,
+      assertStatusCode: Number(probeForm.assertStatusCode) || 200,
+      groupId: probeForm.groupId ? Number(probeForm.groupId) : null
+    };
+    const method = editingProbeId ? 'PUT' : 'POST';
+    const url = editingProbeId ? `/api/v1/probes/${editingProbeId}` : '/api/v1/probes';
+    api(url, {
+      method,
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    }).then(() => {
+      setShowProbeModal(false);
+      loadProbes();
+      loadGroups();
+      loadRecords();
+    });
+  };
+
+  const handleDeleteProbe = (id) => {
+    if (confirm('确认删除该探针？')) {
+      api(`/api/v1/probes/${id}`, {method: 'DELETE'}).then(() => {
+        loadProbes();
+        loadGroups();
+        loadRecords();
+      });
+    }
+  };
+
+  const totalRecordPages = Math.max(1, Math.ceil((recordsData.total || 0) / recordPageSize));
+  const selectedGroup = groups.find(g => String(g.id) === String(probeForm.groupId));
+
+  return React.createElement('div', {},
+    // 顶部统计看板卡片
+    React.createElement('div', {style:{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(210px, 1fr))',gap:14,marginBottom:18}},
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '📁 接口校验组 (Token池)'),
+        React.createElement('div', {style:{fontSize:24,fontWeight:700,color:'#0f172a',marginTop:4}}, groups.length, React.createElement('span', {style:{fontSize:12,fontWeight:400,color:'#64748b',marginLeft:4}}, '组')),
+        React.createElement('div', {style:{fontSize:11,color:'#1890ff',marginTop:4}}, '✓ 统一鉴权与缓存续签')),
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '⚡ 纳管巡检探针'),
+        React.createElement('div', {style:{fontSize:24,fontWeight:700,color:'#0f172a',marginTop:4}}, probes.length, React.createElement('span', {style:{fontSize:12,fontWeight:400,color:'#64748b',marginLeft:4}}, '个')),
+        React.createElement('div', {style:{fontSize:11,color:'#10b981',marginTop:4}}, '✓ 周期健康心跳探测')),
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '🛡️ 集群防重调度机制'),
+        React.createElement('div', {style:{fontSize:18,fontWeight:700,color:'#10b981',marginTop:6}}, 'Leader 动态抢占'),
+        React.createElement('div', {style:{fontSize:11,color:'#64748b',marginTop:4}}, '3台集群仅1台执行，避免重复打扰')),
+      React.createElement('div', {className:'chart-box', style:{padding:'14px 18px',marginBottom:0,background:'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)'}},
+        React.createElement('div', {style:{fontSize:12,color:'#64748b',fontWeight:500}}, '📊 累计巡检流水'),
+        React.createElement('div', {style:{fontSize:24,fontWeight:700,color:'#0f172a',marginTop:4}}, recordsData.total || 0, React.createElement('span', {style:{fontSize:12,fontWeight:400,color:'#64748b',marginLeft:4}}, '次')),
+        React.createElement('div', {style:{fontSize:11,color:'#64748b',marginTop:4}}, '全生命周期审计追踪'))
+    ),
+
+    // 顶部子导航
+    React.createElement('div', {className:'toolbar', style:{justifyContent:'space-between',marginBottom:16}},
+      React.createElement('div', {style:{display:'flex',gap:10,alignItems:'center'}},
+        React.createElement('div', {className:'btn-group'},
+          React.createElement('button', {
+            className:'btn' + (subTab === 'groups' ? ' primary' : ''),
+            onClick:()=>setSubTab('groups')
+          }, '📁 接口校验组 (Token鉴权中心)', React.createElement('span', {className:'badge', style:{marginLeft:6,background:'rgba(255,255,255,0.2)'}}, groups.length)),
+          React.createElement('button', {
+            className:'btn' + (subTab === 'probes' ? ' primary' : ''),
+            onClick:()=>setSubTab('probes')
+          }, '⚡ 探活接口列表', React.createElement('span', {className:'badge', style:{marginLeft:6,background:'rgba(255,255,255,0.2)'}}, probes.length)),
+          React.createElement('button', {
+            className:'btn' + (subTab === 'records' ? ' primary' : ''),
+            onClick:()=>setSubTab('records')
+          }, '📊 巡检明细历史流水', React.createElement('span', {className:'badge', style:{marginLeft:6,background:'rgba(255,255,255,0.2)'}}, recordsData.total || 0))
+        )
+      ),
+      React.createElement('div', {style:{display:'flex',gap:8}},
+        subTab === 'groups' && React.createElement('button', {className:'btn primary', onClick:handleOpenCreateGroup}, '+ 新建接口校验组'),
+        subTab === 'probes' && React.createElement('button', {className:'btn primary', onClick:()=>handleOpenCreateProbe()}, '+ 新建巡检接口'),
+        React.createElement('button', {className:'btn small', onClick:()=>{loadGroups(); loadProbes(); loadRecords();}}, '🔄 刷新全部')
+      )
+    ),
+
+    // --- 1. 接口校验组列表 ---
+    subTab === 'groups' && React.createElement('div', {className:'chart-box'},
+      React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},
+        React.createElement('h3', {style:{margin:0}}, '接口校验组管理（统一鉴权与 Token 共享调度池）'),
+        React.createElement('span', {style:{fontSize:12,color:'#666'}}, '💡 同一校验组内的所有接口共用同一个 Token，登录一次后缓存 4 小时，下属接口批量调度')) ,
+      React.createElement('div', {className:'table-wrap'},
+        groups.length === 0
+          ? React.createElement('div', {className:'empty'}, '暂无校验组，点击上方按钮新建')
+          : React.createElement('table', {},
+              React.createElement('thead', {}, React.createElement('tr', {},
+                ['校验组名称', '运行状态', '所属服务', '集群调度模式', '鉴权模式', 'Token 来源与账号', 'Token 缓存期', '默认超时', '默认调用间隔', '组内接口数', '操作'].map(th => React.createElement('th', {key:th}, th)))),
+              React.createElement('tbody', {}, groups.map(g =>
+                React.createElement('tr', {key: g.id, style: g.enabled === 0 ? {opacity: 0.6, background: '#fafafa'} : {}},
+                  React.createElement('td', {},
+                    React.createElement('strong', {style:{color:'#1890ff'}}, g.groupName),
+                    g.description && React.createElement('div', {style:{fontSize:11,color:'#888',marginTop:2}}, g.description)),
+                  React.createElement('td', {},
+                    React.createElement('button', {
+                      className: 'btn small',
+                      style: {padding: '2px 8px', fontSize: 11, cursor: 'pointer', background: g.enabled === 0 ? '#f0f0f0' : '#e6f7ff', borderColor: g.enabled === 0 ? '#d9d9d9' : '#91d5ff', color: g.enabled === 0 ? '#888' : '#096dd9'},
+                      onClick: () => handleToggleGroup(g.id),
+                      title: '点击切换 启用/停用'
+                    }, g.enabled === 0 ? '⚪ 已停用' : '🟢 已启用')),
+                  React.createElement('td', {}, React.createElement('span', {className:'badge blue'}, g.appName)),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge ' + (g.dispatchMode === 'ALL_NODES' ? 'orange' : 'green')},
+                      g.dispatchMode === 'ALL_NODES' ? '🌐 全节点' : '🛡️ 单Leader防重')),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge ' + (g.authType === 'DYNAMIC_LOGIN' ? 'blue' : 'gray')},
+                      g.authType === 'DYNAMIC_LOGIN' ? '🔐 动态登录换取' : '公开/静态')),
+                  React.createElement('td', {style:{fontFamily:'monospace',fontSize:12}},
+                    g.authType === 'DYNAMIC_LOGIN'
+                      ? (g.loginBody ? g.loginBody.replace(/\s+/g,' ') : g.loginUrl)
+                      : '-'),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge green'}, Math.round((g.expiresInSeconds || 14400) / 3600) + ' 小时缓存')),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge blue'}, (g.defaultTimeoutMs || 30000) + 'ms')),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge orange'}, (g.defaultIntervalSeconds ? Math.round(g.defaultIntervalSeconds / 60) : 60) + ' 分钟/次')),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge ' + (g.probeCount > 0 ? 'blue' : 'gray')}, (g.probeCount || 0) + ' 个接口')),
+                  React.createElement('td', {},
+                    React.createElement('div', {style:{display:'flex',gap:6}},
+                      React.createElement('button', {className:'btn small' + (g.enabled === 0 ? ' primary' : ''), onClick:()=>handleToggleGroup(g.id)}, g.enabled === 0 ? '▶ 启用' : '⏸ 停用'),
+                      React.createElement('button', {className:'btn small primary', onClick:()=>handleOpenCreateProbe(g.id)}, '+ 添加接口'),
+                      React.createElement('button', {className:'btn small', onClick:()=>handleOpenEditGroup(g)}, '编辑组'),
+                      React.createElement('button', {className:'btn danger small', onClick:()=>handleDeleteGroup(g.id)}, '删除'))))))))),
+
+    // --- 2. 接口列表 ---
+    subTab === 'probes' && React.createElement('div', {className:'chart-box'},
+      React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}},
+        React.createElement('h3', {style:{margin:0}}, '巡检探针接口列表 (' + probes.length + ')'),
+        React.createElement('span', {style:{fontSize:12,color:'#666'}}, '💡 接口可归属于校验组共享 Token，亦可独立运行，支持请求参数动态占位符 ${UUID}、${TIMESTAMP}')) ,
+      React.createElement('div', {className:'table-wrap'},
+        probes.length === 0
+          ? React.createElement('div', {className:'empty'}, '暂无探针接口')
+          : React.createElement('table', {},
+              React.createElement('thead', {}, React.createElement('tr', {},
+                ['探针名称', '运行状态', '所属服务', '所属校验组', '集群调度', '目标 URL', '方法', '超时(ms)', '执行周期', '状态码断言', '操作'].map(th => React.createElement('th', {key:th}, th)))),
+              React.createElement('tbody', {}, probes.map(p =>
+                React.createElement('tr', {key: p.id, style: p.enabled === 0 ? {opacity: 0.6, background: '#fafafa'} : {}},
+                  React.createElement('td', {},
+                    React.createElement('strong', {}, p.probeName),
+                    p.description && React.createElement('div', {style:{fontSize:11,color:'#888',marginTop:2}}, p.description)),
+                  React.createElement('td', {},
+                    React.createElement('button', {
+                      className: 'btn small',
+                      style: {padding: '2px 8px', fontSize: 11, cursor: 'pointer', background: p.enabled === 0 ? '#f0f0f0' : '#f6ffed', borderColor: p.enabled === 0 ? '#d9d9d9' : '#b7eb8f', color: p.enabled === 0 ? '#888' : '#389e0d'},
+                      onClick: () => handleToggleProbe(p.id),
+                      title: '点击切换 启用/停用'
+                    }, p.enabled === 0 ? '⚪ 已停用' : '🟢 已启用')),
+                  React.createElement('td', {}, React.createElement('span', {className:'badge blue'}, p.appName)),
+                  React.createElement('td', {},
+                    p.groupId
+                      ? React.createElement('span', {className:'badge green', title:'继承自校验组'}, '📁 ' + (p.groupName || ('组#' + p.groupId)))
+                      : React.createElement('span', {className:'badge gray'}, '独立接口')),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge ' + (p.dispatchMode === 'ALL_NODES' ? 'orange' : 'green')},
+                      p.dispatchMode === 'ALL_NODES' ? '🌐 全节点' : '🛡️ 单Leader')),
+                  React.createElement('td', {style:{maxWidth:280,overflow:'hidden',textOverflow:'ellipsis',fontFamily:'monospace',fontSize:12}}, p.targetUrl),
+                  React.createElement('td', {}, React.createElement('span', {className:'badge gray'}, p.httpMethod)),
+                  React.createElement('td', {},
+                    React.createElement('span', {className:'badge' + ((p.timeoutMs || 30000) >= 30000 ? ' blue' : ' gray')}, (p.timeoutMs || 30000) + 'ms')),
+                  React.createElement('td', {},
+                    p.intervalSeconds >= 3600
+                      ? (p.intervalSeconds / 3600).toFixed(1) + ' 小时'
+                      : p.intervalSeconds + ' 秒'),
+                  React.createElement('td', {}, p.assertStatusCode),
+                  React.createElement('td', {},
+                    React.createElement('div', {style:{display:'flex',gap:6}},
+                      React.createElement('button', {className:'btn small' + (p.enabled === 0 ? ' primary' : ''), onClick:()=>handleToggleProbe(p.id)}, p.enabled === 0 ? '▶ 启用' : '⏸ 停用'),
+                      React.createElement('button', {className:'btn small', onClick:()=>handleOpenEditProbe(p)}, '编辑'),
+                      React.createElement('button', {className:'btn danger small', onClick:()=>handleDeleteProbe(p.id)}, '删除'))))))))),
+
+    // --- 3. 巡检流水 ---
+    subTab === 'records' && React.createElement('div', {className:'chart-box'},
+      React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},
+        React.createElement('h3', {style:{margin:0}}, '最近巡检明细流水 (' + (recordsData.total || 0) + ')'),
+        React.createElement('div', {style:{display:'flex',gap:8,alignItems:'center'}},
+          React.createElement('div', {className:'btn-group'},
+            React.createElement('button', {
+              className:'btn small' + (recordFilter === -1 ? ' primary' : ''),
+              onClick:()=>{ setRecordFilter(-1); setRecordPage(1); }
+            }, '全部流水'),
+            React.createElement('button', {
+              className:'btn small' + (recordFilter === 0 ? ' primary' : ''),
+              onClick:()=>{ setRecordFilter(0); setRecordPage(1); }
+            }, '仅失败 ❌'),
+            React.createElement('button', {
+              className:'btn small' + (recordFilter === 1 ? ' primary' : ''),
+              onClick:()=>{ setRecordFilter(1); setRecordPage(1); }
+            }, '仅成功 ✓')
+          ),
+          React.createElement('button', {className:'btn small', onClick:loadRecords}, '🔄 刷新')
+        )
+      ),
+      React.createElement('div', {className:'table-wrap'},
+        (recordsData.data || []).length === 0
+          ? React.createElement('div', {className:'empty'}, '暂无巡检记录')
+          : React.createElement('table', {},
+              React.createElement('thead', {}, React.createElement('tr', {},
+                ['探针名称', '所属服务', '执行主机', '状态', '响应码', '耗时', '错误原因', 'Token续签', '探测时间'].map(th => React.createElement('th', {key:th}, th)))),
+              React.createElement('tbody', {}, (recordsData.data || []).map(r =>
+                React.createElement('tr', {key: r.id},
+                  React.createElement('td', {}, React.createElement('strong', {}, r.probeName)),
+                  React.createElement('td', {}, r.appName),
+                  React.createElement('td', {}, React.createElement('span', {className:'badge gray', style:{fontFamily:'monospace',fontSize:12}}, r.hostName || '-')),
+                  React.createElement('td', {}, React.createElement('span', {className:'badge ' + (r.isSuccess === 1 ? 'green' : 'red')}, r.isSuccess === 1 ? '成功' : '失败')),
+                  React.createElement('td', {}, r.statusCode || '-'),
+                  React.createElement('td', {}, r.costMs + 'ms'),
+                  React.createElement('td', {style:{color:'#ff4d4f',maxWidth:260,overflow:'hidden',textOverflow:'ellipsis'}, title: r.errorMsg || ''}, r.errorMsg || '-'),
+                  React.createElement('td', {}, r.tokenRefreshed === 1 ? React.createElement('span', {className:'badge orange'}, '已自动刷新') : '否'),
+                  React.createElement('td', {}, dayjs(r.createdAt).format('MM-DD HH:mm:ss'))))))),
+      React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:12,padding:'8px 4px',fontSize:13,color:'#666'}},
+        React.createElement('span', {}, `第 ${recordPage} / ${totalRecordPages} 页 (每页 ${recordPageSize} 条)`),
+        React.createElement('div', {style:{display:'flex',gap:8}},
+          React.createElement('button', {
+            className:'btn small',
+            disabled: recordPage <= 1,
+            onClick: () => setRecordPage(p => Math.max(1, p - 1))
+          }, '◀ 上一页'),
+          React.createElement('button', {
+            className:'btn small',
+            disabled: recordPage >= totalRecordPages,
+            onClick: () => setRecordPage(p => Math.min(totalRecordPages, p + 1))
+          }, '下一页 ▶'))
+      )
+    ),
+
+    // --- 4. 校验组编辑 Modal ---
+    showGroupModal && React.createElement('div', {className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&setShowGroupModal(false)},
+      React.createElement('div', {className:'modal', style:{width:700, maxWidth:'95vw'}},
+        React.createElement('h3', {}, editingGroupId ? '编辑接口校验组' : '新建接口校验组 (Token与鉴权共享中心)'),
+        React.createElement('div', {style:{fontSize:12,color:'#666',marginBottom:14,background:'#f0f5ff',padding:'8px 12px',borderRadius:4,border:'1px solid #d6e4ff'}},
+          '💡 该组下的所有接口将统一复用同一个鉴权 Token。例如使用 WB-4830 换取 Token 后缓存 4 小时，下属各接口无需单独配置登录。'),
+
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '校验组名称 *'),
+          React.createElement('input', {value:groupForm.groupName, onChange:e=>setGroupForm({...groupForm, groupName:e.target.value}), placeholder:'例如: KMS外部接口校验组', style:{width:340}})),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '启用状态 *'),
+          React.createElement('select', {value:groupForm.enabled !== undefined ? groupForm.enabled : 1, onChange:e=>setGroupForm({...groupForm, enabled:Number(e.target.value)}), style:{width:240}},
+            React.createElement('option', {value:1}, '🟢 立即启用 (默认加入就启用)'),
+            React.createElement('option', {value:0}, '⚪ 暂且停用 (不向Agent分发)'))),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '所属服务 *'),
+          React.createElement('input', {value:groupForm.appName, onChange:e=>setGroupForm({...groupForm, appName:e.target.value}), placeholder:'例如: jk-kms-backend', style:{width:340}})),
+
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '集群调度模式'),
+          React.createElement('select', {value:groupForm.dispatchMode || 'CLUSTER_SINGLE', onChange:e=>setGroupForm({...groupForm, dispatchMode:e.target.value}), style:{width:340}},
+            React.createElement('option', {value:'CLUSTER_SINGLE'}, '🛡️ 集群单节点防重 (推荐：3台机器仅选举1台Leader执行，防重复调用)'),
+            React.createElement('option', {value:'ALL_NODES'}, '🌐 全节点均执行 (每台机器的agent都各自调用一次)'))),
+
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '认证类型'),
+          React.createElement('select', {value:groupForm.authType, onChange:e=>setGroupForm({...groupForm, authType:e.target.value}), style:{width:240}},
+            React.createElement('option', {value:'DYNAMIC_LOGIN'}, '动态登录换取 Token (支持缓存与自动续签)'),
+            React.createElement('option', {value:'STATIC'}, '静态固定 Token / Header'),
+            React.createElement('option', {value:'NONE'}, '无需认证'))),
+
+        groupForm.authType === 'DYNAMIC_LOGIN' && React.createElement('div', {style:{background:'#e6f7ff',border:'1px solid #91d5ff',borderRadius:6,padding:'12px 16px',margin:'8px 0 14px'}},
+          React.createElement('div', {style:{fontWeight:600,fontSize:13,color:'#096dd9',marginBottom:6}}, '🔐 共享 Token 登录与提取参数'),
+          React.createElement('div', {className:'form-row', style:{marginBottom:8}},
+            React.createElement('label', {style:{width:140}}, '登录接口 URL *'),
+            React.createElement('input', {value:groupForm.loginUrl, onChange:e=>setGroupForm({...groupForm, loginUrl:e.target.value}), placeholder:'http://127.0.0.1:8080/api/chatbot/kmsLogin/externalLogin', style:{width:380}})),
+          React.createElement('div', {className:'form-row', style:{marginBottom:8}},
+            React.createElement('label', {style:{width:140}}, '请求方式'),
+            React.createElement('select', {value:groupForm.loginMethod, onChange:e=>setGroupForm({...groupForm, loginMethod:e.target.value}), style:{width:120}},
+              React.createElement('option', {value:'POST'}, 'POST'),
+              React.createElement('option', {value:'GET'}, 'GET'))),
+          React.createElement('div', {className:'form-row', style:{marginBottom:8,alignItems:'flex-start'}},
+            React.createElement('label', {style:{width:140,paddingTop:4}}, '登录 Body (JSON)'),
+            React.createElement('textarea', {value:groupForm.loginBody, onChange:e=>setGroupForm({...groupForm, loginBody:e.target.value}), placeholder:'{\n  "workNo": "WB-4830",\n  "secret": "kkjvnio2r32490vk^43gan#4*@456nn"\n}', style:{width:380,height:55,fontFamily:'monospace',fontSize:12}})),
+          React.createElement('div', {className:'form-row', style:{marginBottom:8}},
+            React.createElement('label', {style:{width:140}}, 'Token 提取路径'),
+            React.createElement('input', {value:groupForm.tokenPath, onChange:e=>setGroupForm({...groupForm, tokenPath:e.target.value}), placeholder:'result.accessToken', style:{width:200}}),
+            React.createElement('span', {style:{fontSize:11,color:'#888',marginLeft:8}}, '如 result.accessToken 或 data.token')),
+          React.createElement('div', {className:'form-row', style:{marginBottom:8}},
+            React.createElement('label', {style:{width:140}}, '注入接口 Header 名'),
+            React.createElement('input', {value:groupForm.headerName, onChange:e=>setGroupForm({...groupForm, headerName:e.target.value}), placeholder:'accessToken', style:{width:200}}),
+            React.createElement('span', {style:{fontSize:11,color:'#888',marginLeft:8}}, 'KMS需设为 accessToken')),
+          React.createElement('div', {className:'form-row', style:{marginBottom:8}},
+            React.createElement('label', {style:{width:140}}, 'Header 前缀'),
+            React.createElement('input', {value:groupForm.tokenPrefix, onChange:e=>setGroupForm({...groupForm, tokenPrefix:e.target.value}), placeholder:'无前缀请留空', style:{width:200}}),
+            React.createElement('span', {style:{fontSize:11,color:'#888',marginLeft:8}}, 'JWT无需Bearer请留空')),
+          React.createElement('div', {className:'form-row', style:{marginBottom:0}},
+            React.createElement('label', {style:{width:140}}, 'Token 缓存有效期(小时)'),
+            React.createElement('input', {type:'number', value:groupForm.expiresInHours, onChange:e=>setGroupForm({...groupForm, expiresInHours:Number(e.target.value)}), style:{width:100}}),
+            React.createElement('span', {style:{fontSize:12,color:'#096dd9',marginLeft:8,fontWeight:600}}, '默认 4 小时，期间所有接口复用该 Token'))
+        ),
+
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '组默认调用间隔(秒)'),
+          React.createElement('input', {type:'number', value:groupForm.defaultIntervalSeconds, onChange:e=>setGroupForm({...groupForm, defaultIntervalSeconds:Number(e.target.value)}), style:{width:140}}),
+          React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, '默认 3600 秒 (1小时)，组内接口可单独自定义覆盖')),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '组默认超时(毫秒)'),
+          React.createElement('input', {type:'number', value:groupForm.defaultTimeoutMs, onChange:e=>setGroupForm({...groupForm, defaultTimeoutMs:Number(e.target.value)}), style:{width:140}})),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '描述说明'),
+          React.createElement('input', {value:groupForm.description, onChange:e=>setGroupForm({...groupForm, description:e.target.value}), placeholder:'说明该组用途', style:{width:380}})),
+
+        React.createElement('div', {className:'btn-row'},
+          React.createElement('button', {className:'btn', onClick:()=>setShowGroupModal(false)}, '取消'),
+          React.createElement('button', {className:'btn primary', onClick:handleSaveGroup}, editingGroupId ? '保存组配置' : '创建校验组'))
+      )
+    ),
+
+    // --- 5. 探针接口编辑 Modal ---
+    showProbeModal && React.createElement('div', {className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&setShowProbeModal(false)},
+      React.createElement('div', {className:'modal', style:{width:680, maxWidth:'95vw'}},
+        React.createElement('h3', {}, editingProbeId ? '编辑接口健康巡检探针' : '新建接口健康巡检探针'),
+
+        // 所属校验组选择
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '所属接口校验组'),
+          React.createElement('select', {
+            value: probeForm.groupId,
+            onChange: e => {
+              const gid = e.target.value;
+              setProbeForm(f => {
+                const g = groups.find(x => String(x.id) === String(gid));
+                return {
+                  ...f,
+                  groupId: gid,
+                  appName: g ? g.appName : f.appName,
+                  intervalSeconds: g ? (g.defaultIntervalSeconds || 3600) : f.intervalSeconds
+                };
+              });
+            },
+            style:{width:340}
+          },
+            React.createElement('option', {value:''}, '[无] 独立接口 / 单独配置鉴权'),
+            groups.map(g => React.createElement('option', {key:g.id, value:g.id}, `📁 ${g.groupName} (${g.appName}) - 共享Token缓存${Math.round((g.expiresInSeconds||14400)/3600)}h`)))),
+
+        selectedGroup && React.createElement('div', {style:{background:'#f6ffed',border:'1px solid #b7eb8f',borderRadius:6,padding:'8px 12px',marginBottom:12,fontSize:12,color:'#389e0d'}},
+          `🔒 已关联校验组「${selectedGroup.groupName}」：该接口自动复用该组获取的 Token（缓存 4 小时），无需单独配置登录！`),
+
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '探针名称 *'),
+          React.createElement('input', {value:probeForm.probeName, onChange:e=>setProbeForm({...probeForm, probeName:e.target.value}), placeholder:'例如: KMS-chatForEx外部对话探活', style:{width:340}})),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '启用状态 *'),
+          React.createElement('select', {value:probeForm.enabled !== undefined ? probeForm.enabled : 1, onChange:e=>setProbeForm({...probeForm, enabled:Number(e.target.value)}), style:{width:240}},
+            React.createElement('option', {value:1}, '🟢 立即启用 (默认加入就启用)'),
+            React.createElement('option', {value:0}, '⚪ 暂且停用 (不分发至Agent)'))),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '所属应用'),
+          React.createElement('input', {value:probeForm.appName, onChange:e=>setProbeForm({...probeForm, appName:e.target.value}), placeholder:'* 或 具体服务名', style:{width:340}})),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '目标 URL *'),
+          React.createElement('input', {value:probeForm.targetUrl, onChange:e=>setProbeForm({...probeForm, targetUrl:e.target.value}), placeholder:'http://127.0.0.1:8080/api/chatbot/chatForEx', style:{width:460}})),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '请求方式'),
+          React.createElement('select', {value:probeForm.httpMethod, onChange:e=>setProbeForm({...probeForm, httpMethod:e.target.value}), style:{width:140}},
+            ['GET','POST','PUT','DELETE'].map(m => React.createElement('option', {key:m, value:m}, m)))),
+
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '集群调度模式'),
+          React.createElement('select', {value:probeForm.dispatchMode || 'CLUSTER_SINGLE', onChange:e=>setProbeForm({...probeForm, dispatchMode:e.target.value}), style:{width:340}},
+            React.createElement('option', {value:'CLUSTER_SINGLE'}, '🛡️ 集群单节点防重 (推荐：同一集群仅选举1台Leader执行)'),
+            React.createElement('option', {value:'ALL_NODES'}, '🌐 全节点均执行 (所有Agent机器各自探测一次)'))),
+
+        // 接口自身请求体与 Headers (支持 ${UUID}、${TIMESTAMP} 动态替换)
+        React.createElement('div', {style:{background:'#fafafa',border:'1px dashed #d9d9d9',borderRadius:6,padding:'10px 14px',margin:'8px 0 12px'}},
+          React.createElement('div', {style:{fontWeight:600,fontSize:12,color:'#555',marginBottom:6,display:'flex',justifyContent:'space-between'}},
+            React.createElement('span', {}, '📦 业务请求参数 Payload (支持动态模板占位符)'),
+            React.createElement('span', {style:{fontSize:11,color:'#1890ff'}}, '💡 支持 ${UUID} 自动每次生成全新独立会话')),
+          React.createElement('div', {className:'form-row', style:{marginBottom:6,alignItems:'flex-start'}},
+            React.createElement('label', {style:{width:130,paddingTop:4}}, '请求体 Payload'),
+            React.createElement('textarea', {value:probeForm.requestBody||'', onChange:e=>setProbeForm({...probeForm, requestBody:e.target.value}), placeholder:'{\n  "conversationId": "${UUID}",\n  "messages": {\n    "role": "user",\n    "content": "系统健康检查探活"\n  },\n  "stream": false\n}', style:{width:380,height:75,fontFamily:'monospace',fontSize:12}})),
+          React.createElement('div', {className:'form-row', style:{marginBottom:0}},
+            React.createElement('label', {style:{width:130}}, '自定义 Headers'),
+            React.createElement('input', {value:probeForm.requestHeaders||'', onChange:e=>setProbeForm({...probeForm, requestHeaders:e.target.value}), placeholder:'{"Content-Type":"application/json"}', style:{width:380,fontFamily:'monospace',fontSize:12}}))
+        ),
+
+        // 若未关联校验组，提供独立认证设置
+        !selectedGroup && React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '独立认证模式'),
+          React.createElement('select', {value:probeForm.authType, onChange:e=>setProbeForm({...probeForm, authType:e.target.value}), style:{width:240}},
+            React.createElement('option', {value:'NONE'}, '无需认证 (公开接口)'),
+            React.createElement('option', {value:'STATIC'}, '静态固定 Token / Header'),
+            React.createElement('option', {value:'DYNAMIC_LOGIN'}, '单独动态登录获取 Token'))),
+
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '巡检周期(秒)'),
+          React.createElement('input', {type:'number', value:probeForm.intervalSeconds, onChange:e=>setProbeForm({...probeForm, intervalSeconds:Number(e.target.value)}), style:{width:140}}),
+          React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, selectedGroup ? `默认继承组周期 (${selectedGroup.defaultIntervalSeconds}秒/1小时)，可单独设置覆盖` : '如 3600 (每小时一次)')),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '请求超时(毫秒) *'),
+          React.createElement('input', {type:'number', value:(probeForm.timeoutMs !== undefined && probeForm.timeoutMs !== null) ? probeForm.timeoutMs : '', onChange:e=>setProbeForm({...probeForm, timeoutMs: e.target.value === '' ? '' : Number(e.target.value)}), style:{width:140}}),
+          React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, selectedGroup ? `优先使用此值覆盖组超时；留空则继承组默认 (${selectedGroup.defaultTimeoutMs || 30000}ms)` : '单位毫秒，如 1000 (1秒), 30000 (30秒)')),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '期望状态码'),
+          React.createElement('input', {type:'number', value:probeForm.assertStatusCode, onChange:e=>setProbeForm({...probeForm, assertStatusCode:Number(e.target.value)}), style:{width:140}})),
+        React.createElement('div', {className:'form-row'},
+          React.createElement('label', {}, '期望响应字符'),
+          React.createElement('input', {value:probeForm.assertBodyContains, onChange:e=>setProbeForm({...probeForm, assertBodyContains:e.target.value}), placeholder:'包含特定字符如 200 (选填)', style:{width:320}})),
+        React.createElement('div', {className:'btn-row'},
+          React.createElement('button', {className:'btn', onClick:()=>setShowProbeModal(false)}, '取消'),
+          React.createElement('button', {className:'btn primary', onClick:handleSaveProbe}, editingProbeId ? '保存修改' : '保存并生效'))))
+  );
+}
+
+// ====== 安装与存储引擎选择向导 Modal ======
+function SetupWizardModal({ visible, currentStatus, onSaved, onClose }) {
+  if (!visible) return null;
+  const cfg = currentStatus?.config || {};
+  const [storageType, setStorageType] = useState(cfg.storageType || 'ELASTICSEARCH');
+  const [esUrl, setEsUrl] = useState(cfg.esUrl || 'http://127.0.0.1:9200');
+  const [esUsername, setEsUsername] = useState(cfg.esUsername || '');
+  const [esPassword, setEsPassword] = useState(cfg.esPassword || '');
+  const [esIndexPrefix, setEsIndexPrefix] = useState(cfg.esIndexPrefix || 'apm_');
+  const [mysqlUrl, setMysqlUrl] = useState(cfg.mysqlUrl || 'jdbc:mysql://127.0.0.1:3306/monitor?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai');
+  const [mysqlUsername, setMysqlUsername] = useState(cfg.mysqlUsername || 'root');
+  const [mysqlPassword, setMysqlPassword] = useState(cfg.mysqlPassword || '');
+
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleTest = () => {
+    setTesting(true);
+    setTestResult(null);
+    let payload = { type: storageType };
+    if (storageType === 'ELASTICSEARCH' || storageType === 'HYBRID') {
+      payload.url = esUrl;
+      payload.username = esUsername;
+      payload.password = esPassword;
+    } else if (storageType === 'MYSQL') {
+      payload.url = mysqlUrl;
+      payload.username = mysqlUsername;
+      payload.password = mysqlPassword;
+    }
+    api('/api/setup/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(res => {
+      setTesting(false);
+      setTestResult(res);
+    }).catch(err => {
+      setTesting(false);
+      setTestResult({ success: false, message: '请求失败: ' + err.message });
+    });
+  };
+
+  const handleSave = () => {
+    setSaving(true);
+    const body = {
+      storageType,
+      initialized: true,
+      esUrl,
+      esUsername,
+      esPassword,
+      esIndexPrefix,
+      mysqlUrl,
+      mysqlUsername,
+      mysqlPassword
+    };
+    api('/api/setup/initialize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }).then(res => {
+      setSaving(false);
+      if (res.success) {
+        alert('🎉 ' + res.message);
+        onSaved?.();
+      } else {
+        alert('保存失败: ' + res.message);
+      }
+    }).catch(err => {
+      setSaving(false);
+      alert('保存异常: ' + err.message);
+    });
+  };
+
+  const ENGINES = [
+    {
+      key: 'ELASTICSEARCH',
+      badge: '推荐',
+      badgeColor: 'blue',
+      title: '🟢 纯 Elasticsearch 模式',
+      desc: '客户已有 ES 集群。主机指标、接口巡检和未来业务日志统一写入 ES 索引，零多余数据库。'
+    },
+    {
+      key: 'MYSQL',
+      badge: '传统',
+      badgeColor: 'gray',
+      title: '🔵 纯 MySQL 关系库模式',
+      desc: '客户仅有 MySQL。元数据与指标统一落库 MySQL 表，支持按日物理分区和秒级清理。'
+    },
+    {
+      key: 'HYBRID',
+      badge: '企业级',
+      badgeColor: 'orange',
+      title: '🟣 MySQL + ES 协同模式',
+      desc: '黄金架构：MySQL 负责探针配置与规则元数据，ES 负责抗海量时序指标与大文本业务日志。'
+    },
+    {
+      key: 'EMBEDDED',
+      badge: '极速',
+      badgeColor: 'green',
+      title: '🟡 零依赖内置模式',
+      desc: '客户现场什么中间件都没有？内置本地嵌入库，单机开箱即用，无需配置外部账号网络。'
+    }
+  ];
+
+  return React.createElement('div', {className:'modal-overlay', onClick: e => e.target===e.currentTarget && onClose?.()},
+    React.createElement('div', {className:'modal', style:{width:760,maxWidth:'95vw'}},
+      React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}},
+        React.createElement('div', {},
+          React.createElement('h3', {style:{margin:0,fontSize:18,display:'flex',alignItems:'center',gap:8}}, '🚀 LightPulse 底层存储引擎配置向导'),
+          React.createElement('p', {style:{margin:'4px 0 0',fontSize:13,color:'#888'}}, '灵活选择您的底层数据存储架构，支持动态测试连通性并自动初始化')),
+        currentStatus?.initialized && React.createElement('button', {
+          className:'btn small',
+          onClick: onClose,
+          style:{border:'none',fontSize:18,color:'#999',cursor:'pointer'}
+        }, '✕')),
+
+      React.createElement('div', {className:'engine-card-grid'},
+        ENGINES.map(eng =>
+          React.createElement('div', {
+            key: eng.key,
+            className: 'engine-card' + (storageType === eng.key ? ' active' : ''),
+            onClick: () => { setStorageType(eng.key); setTestResult(null); }
+          },
+            React.createElement('div', {className:'title'},
+              React.createElement('span', {}, eng.title),
+              React.createElement('span', {className:'badge ' + eng.badgeColor}, eng.badge)),
+            React.createElement('div', {className:'desc'}, eng.desc)))),
+
+      // 表单区域
+      React.createElement('div', {style:{background:'#f9f9f9',padding:16,borderRadius:8,marginBottom:16,border:'1px solid #eee'}},
+        (storageType === 'ELASTICSEARCH' || storageType === 'HYBRID') && React.createElement('div', {},
+          React.createElement('h4', {style:{margin:'0 0 12px',fontSize:14,color:'#333'}}, '🔍 Elasticsearch 连接参数'),
+          React.createElement('div', {className:'form-row'},
+            React.createElement('label', {style:{width:120}}, 'ES 集群地址:'),
+            React.createElement('input', {style:{flex:1}, value:esUrl, onChange:e=>setEsUrl(e.target.value), placeholder:'如 http://192.168.1.50:9200'})),
+          React.createElement('div', {style:{display:'flex',gap:16}},
+            React.createElement('div', {className:'form-row', style:{flex:1}},
+              React.createElement('label', {style:{width:120}}, 'ES 用户名:'),
+              React.createElement('input', {style:{flex:1}, value:esUsername, onChange:e=>setEsUsername(e.target.value), placeholder:'无认证留空'})),
+            React.createElement('div', {className:'form-row', style:{flex:1}},
+              React.createElement('label', {style:{width:80}}, 'ES 密码:'),
+              React.createElement('input', {style:{flex:1}, type:'password', value:esPassword, onChange:e=>setEsPassword(e.target.value), placeholder:'无认证留空'}))),
+          React.createElement('div', {className:'form-row'},
+            React.createElement('label', {style:{width:120}}, '索引命名前缀:'),
+            React.createElement('input', {style:{width:180}, value:esIndexPrefix, onChange:e=>setEsIndexPrefix(e.target.value), placeholder:'默认 apm_'}),
+            React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, '将自动创建 ${前缀}metrics, ${前缀}probes, ${前缀}logs'))),
+
+        (storageType === 'MYSQL' || storageType === 'HYBRID') && React.createElement('div', {style:{marginTop: (storageType==='HYBRID'?16:0)}},
+          React.createElement('h4', {style:{margin:'0 0 12px',fontSize:14,color:'#333'}}, '🐬 MySQL 数据库连接参数'),
+          React.createElement('div', {className:'form-row'},
+            React.createElement('label', {style:{width:120}}, 'JDBC URL:'),
+            React.createElement('input', {style:{flex:1}, value:mysqlUrl, onChange:e=>setMysqlUrl(e.target.value), placeholder:'jdbc:mysql://host:3306/monitor...'})),
+          React.createElement('div', {style:{display:'flex',gap:16}},
+            React.createElement('div', {className:'form-row', style:{flex:1}},
+              React.createElement('label', {style:{width:120}}, '用户名:'),
+              React.createElement('input', {style:{flex:1}, value:mysqlUsername, onChange:e=>setMysqlUsername(e.target.value)})),
+            React.createElement('div', {className:'form-row', style:{flex:1}},
+              React.createElement('label', {style:{width:80}}, '密码:'),
+              React.createElement('input', {style:{flex:1}, type:'password', value:mysqlPassword, onChange:e=>setMysqlPassword(e.target.value)})))),
+
+        storageType === 'EMBEDDED' && React.createElement('div', {style:{padding:'12px 0',color:'#666',fontSize:13}},
+          '💡 本地模式无需输入远程网络参数，LightPulse 将直接使用本地数据文件持久化，非常适合快速测试与轻量化运维。')
+      ),
+
+      // 测试结果反馈区
+      testResult && React.createElement('div', {
+        style: {
+          padding: '10px 14px',
+          borderRadius: 6,
+          marginBottom: 16,
+          fontSize: 13,
+          background: testResult.success ? '#f6ffed' : '#fff2f0',
+          border: '1px solid ' + (testResult.success ? '#b7eb8f' : '#ffccc7'),
+          color: testResult.success ? '#389e0d' : '#cf1322'
+        }
+      }, (testResult.success ? '✓ ' : '✕ ') + testResult.message),
+
+      // 按钮操作区
+      React.createElement('div', {className:'btn-row', style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},
+        React.createElement('div', {},
+          storageType !== 'EMBEDDED' && React.createElement('button', {
+            className: 'btn',
+            type: 'button',
+            disabled: testing,
+            onClick: handleTest,
+            style: { display:'inline-flex',alignItems:'center',gap:6 }
+          }, testing ? '正在探测连通性...' : '🔍 测试连通性 (Test Connection)')),
+        React.createElement('div', {style:{display:'flex',gap:10}},
+          currentStatus?.initialized && React.createElement('button', {
+            className: 'btn',
+            type: 'button',
+            onClick: onClose
+          }, '取消'),
+          React.createElement('button', {
+            className: 'btn primary',
+            type: 'button',
+            disabled: saving,
+            onClick: handleSave,
+            style: { padding:'8px 24px',fontSize:14,fontWeight:600 }
+          }, saving ? '正在初始化...' : '🚀 保存配置并进入系统')))
+    )
+  );
+}
+
+// ====== 站点全局配置 ======
+function SettingsTab({ setupStatus, onOpenWizard }) {
+  const [form, setForm] = useState({
+    data_retention_days: '30',
+    alert_webhook_url: '',
+    alert_webhook_secret: '',
+    report_interval_seconds: '10',
+    heartbeat_timeout_seconds: '60',
+    disk_alert_threshold_percent: '88',
+    memory_alert_threshold_percent: '90',
+    alert_silence_window_minutes: '30',
+    victoriametrics_url: 'http://127.0.0.1:8428'
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api('/api/v1/settings').then(r => {
+      if (r?.data) setForm(f => ({...f, ...r.data}));
+    });
+  }, []);
+
+  const handleSave = () => {
+    setSaving(true);
+    api('/api/v1/settings', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(form)
+    }).then(r => {
+      setSaving(false);
+      alert('站点全局配置保存成功并已热生效 ✓');
+    }).catch(err => {
+      setSaving(false);
+      alert('保存失败: ' + err.message);
+    });
+  };
+
+  const handleTestWebhook = () => {
+    if (!form.alert_webhook_url) {
+      alert('请先输入 Webhook URL 地址！');
+      return;
+    }
+    api('/api/v1/settings/test-webhook', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({webhookUrl: form.alert_webhook_url, webhookSecret: form.alert_webhook_secret})
+    }).then(r => {
+      alert(r.message);
+    }).catch(err => {
+      alert('发送失败: ' + err.message);
+    });
+  };
+
+  return React.createElement('div', {style:{maxWidth:850, margin:'0 auto'}},
+    React.createElement('div', {className:'chart-box', style:{padding:24}},
+      // 存储架构卡片
+      React.createElement('div', {style:{background:'#f0f5ff',border:'1px solid #adc6ff',borderRadius:8,padding:'14px 18px',marginBottom:24,display:'flex',justifyContent:'space-between',alignItems:'center'}},
+        React.createElement('div', {},
+          React.createElement('div', {style:{fontWeight:600,color:'#1d39c4',fontSize:14,display:'flex',alignItems:'center',gap:8}},
+            '📦 当前底层存储架构: ' + (setupStatus?.storageTypeName || '纯 Elasticsearch 模式'),
+            React.createElement('span', {className:'badge green'}, '正常运行')),
+          React.createElement('div', {style:{fontSize:12,color:'#555',marginTop:4}},
+            '目标地址: ' + (setupStatus?.config?.storageType === 'MYSQL' ? (setupStatus?.config?.mysqlUrl||'-') : (setupStatus?.config?.esUrl||'内置本地存储')))),
+        React.createElement('button', {
+          className: 'btn small primary',
+          type: 'button',
+          onClick: onOpenWizard,
+          style: { padding:'6px 14px' }
+        }, '🔄 切换存储引擎 / 重新配置向导')),
+
+      React.createElement('h3', {style:{fontSize:16,marginBottom:20,borderBottom:'1px solid #f0f0f0',paddingBottom:12}},
+        '⚙️ LightPulse 站点全局运行参数设置'),
+      
+      React.createElement('div', {className:'form-row', style:{marginBottom:18}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '时序数据存储保留周期:'),
+        React.createElement('select', {
+          value: form.data_retention_days,
+          onChange: e=>setForm({...form, data_retention_days: e.target.value}),
+          style:{width:240}
+        },
+          React.createElement('option', {value:'7'}, '7 天 (高并发轻量模式)'),
+          React.createElement('option', {value:'15'}, '15 天'),
+          React.createElement('option', {value:'30'}, '30 天 (标准推荐)'),
+          React.createElement('option', {value:'90'}, '90 天 (季度归档)'),
+          React.createElement('option', {value:'180'}, '180 天')),
+        React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, 'VictoriaMetrics 或数据表自动物理滚动淘汰时间')),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18,alignItems:'flex-start'}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '告警 Webhook 地址:'),
+        React.createElement('div', {style:{display:'flex',flexDirection:'column',gap:6,flex:1}},
+          React.createElement('div', {style:{display:'flex',gap:8}},
+            React.createElement('input', {
+              value: form.alert_webhook_url,
+              onChange: e=>setForm({...form, alert_webhook_url: e.target.value}),
+              placeholder: '企业微信 / 钉钉 / 飞书 机器人 Webhook 地址',
+              style:{flex:1}
+            }),
+            React.createElement('button', {className:'btn small', type:'button', onClick:handleTestWebhook}, '🔔 测试发送')),
+          React.createElement('span', {style:{fontSize:12,color:'#888'}}, '支持企业微信（qyapi.weixin.qq.com）、钉钉机器人、飞书自定义机器人'))),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18,alignItems:'flex-start'}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '钉钉加签密钥 (Secret):'),
+        React.createElement('div', {style:{display:'flex',flexDirection:'column',gap:4,flex:1}},
+          React.createElement('input', {
+            value: form.alert_webhook_secret || '',
+            onChange: e=>setForm({...form, alert_webhook_secret: e.target.value}),
+            placeholder: '可选。若钉钉机器人安全设置勾选了【加签】，请填写以 SEC 开头的密钥',
+            style:{width:'100%'}
+          }),
+          React.createElement('span', {style:{fontSize:12,color:'#888'}}, '钉钉安全设置提示：若未勾选加签，请在钉钉机器人中添加自定义关键词 “LightPulse” 或 “告警” 或 “监控”'))),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '主机指标采集上报周期(秒):'),
+        React.createElement('input', {
+          type:'number', value: form.report_interval_seconds,
+          onChange: e=>setForm({...form, report_interval_seconds: e.target.value}),
+          style:{width:120}
+        }),
+        React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, 'Agent 采集 CPU/内存/磁盘 并上传到 Server 的间隔时间（默认 10s，热生效）')),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '失联宕机判定超时(秒):'),
+        React.createElement('input', {
+          type:'number', value: form.heartbeat_timeout_seconds,
+          onChange: e=>setForm({...form, heartbeat_timeout_seconds: e.target.value}),
+          style:{width:120}
+        }),
+        React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, '超过该秒数未收到 Agent 心跳即判定物理机宕机或进程崩溃（推荐 30~60s）')),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '磁盘满载预警阈值(%):'),
+        React.createElement('input', {
+          type:'number', value: form.disk_alert_threshold_percent,
+          onChange: e=>setForm({...form, disk_alert_threshold_percent: e.target.value}),
+          style:{width:120}
+        }),
+        React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, '任意挂载点分区使用率超过该阈值时自动提前报警（推荐 85~90%）')),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '内存容量高压阈值(%):'),
+        React.createElement('input', {
+          type:'number', value: form.memory_alert_threshold_percent,
+          onChange: e=>setForm({...form, memory_alert_threshold_percent: e.target.value}),
+          style:{width:120}
+        }),
+        React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, '物理内存使用率超过该阈值触发容量风险告警（推荐 88~92%）')),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '告警静默降噪窗口(分):'),
+        React.createElement('input', {
+          type:'number', value: form.alert_silence_window_minutes,
+          onChange: e=>setForm({...form, alert_silence_window_minutes: e.target.value}),
+          style:{width:120}
+        }),
+        React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, '同一目标故障在静默期内不重复推送，防止机器人刷屏（推荐 15~30分钟）')),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, 'VictoriaMetrics 地址:'),
+        React.createElement('input', {
+          value: form.victoriametrics_url,
+          onChange: e=>setForm({...form, victoriametrics_url: e.target.value}),
+          style:{width:280}
+        }),
+        React.createElement('span', {style:{fontSize:12,color:'#888',marginLeft:8}}, '时序指标批量导出目的地 (默认 http://127.0.0.1:8428)')),
+
+      React.createElement('div', {style:{marginTop:28,paddingTop:16,borderTop:'1px solid #f0f0f0',display:'flex',justifyContent:'space-between',alignItems:'center'}},
+        React.createElement('button', {
+          className:'btn danger',
+          type:'button',
+          onClick: () => {
+            if (confirm('确认清空所有历史主机指标、测试告警与探活流水？\n\n【注意】已配置的接口探针、校验组、账号以及 ES 数据源配置将完整保留不受影响。')) {
+              api('/api/setup/clean-test-data', {method: 'POST'}).then(res => {
+                alert(res.message || '清理完成！');
+                location.reload();
+              }).catch(err => alert('清理失败: ' + err.message));
+            }
+          },
+          style:{padding:'6px 16px'}
+        }, '🧹 一键清空历史测试数据 (清除测试主机与告警)'),
+        React.createElement('button', {
+          className:'btn primary',
+          disabled: saving,
+          onClick: handleSave,
+          style:{padding:'8px 24px',fontSize:14}
+        }, saving ? '保存中...' : '💾 保存全部站点配置'))
+    )
+  );
+}
+
+function ChangePasswordModal({ visible, onClose }) {
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!visible) return null;
+
+  const handleSubmit = () => {
+    setError('');
+    if (!oldPassword || !newPassword) {
+      setError('请输入当前密码和新密码');
+      return;
+    }
+    if (newPassword.length < 5) {
+      setError('新密码长度不能少于 5 位');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('两次输入的新密码不一致');
+      return;
+    }
+
+    setLoading(true);
+    api('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oldPassword, newPassword })
+    }).then(res => {
+      setLoading(false);
+      if (res.code === 200) {
+        alert('密码修改成功，请使用新密码重新登录！');
+        localStorage.removeItem('LP_TOKEN');
+        document.cookie = 'LP_TOKEN=; path=/; max-age=0';
+        window.location.replace(BASE + '/login.html');
+      } else {
+        setError(res.message || '修改失败');
+      }
+    }).catch(err => {
+      setLoading(false);
+      setError('修改异常: ' + err.message);
+    });
+  };
+
+  return React.createElement('div', {className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&onClose()},
+    React.createElement('div', {className:'modal', style:{maxWidth:420}},
+      React.createElement('h3', {}, '🔑 修改管理员密码'),
+      error && React.createElement('div', {style:{background:'#fff2f0',border:'1px solid #ffccc7',color:'#ff4d4f',padding:'8px 12px',borderRadius:4,fontSize:13,marginBottom:12}}, error),
+      React.createElement('div', {className:'form-row', style:{flexDirection:'column',alignItems:'flex-start',gap:4}},
+        React.createElement('label', {}, '当前密码:'),
+        React.createElement('input', {type:'password', value:oldPassword, onChange:e=>setOldPassword(e.target.value), placeholder:'请输入原密码', style:{width:'100%'}})),
+      React.createElement('div', {className:'form-row', style:{flexDirection:'column',alignItems:'flex-start',gap:4}},
+        React.createElement('label', {}, '新密码:'),
+        React.createElement('input', {type:'password', value:newPassword, onChange:e=>setNewPassword(e.target.value), placeholder:'至少 5 位新密码', style:{width:'100%'}})),
+      React.createElement('div', {className:'form-row', style:{flexDirection:'column',alignItems:'flex-start',gap:4}},
+        React.createElement('label', {}, '确认新密码:'),
+        React.createElement('input', {type:'password', value:confirmPassword, onChange:e=>setConfirmPassword(e.target.value), placeholder:'再次输入新密码', style:{width:'100%'}})),
+      React.createElement('div', {className:'btn-row'},
+        React.createElement('button', {className:'btn', onClick:onClose, disabled:loading}, '取消'),
+        React.createElement('button', {className:'btn primary', onClick:handleSubmit, disabled:loading}, loading ? '保存中...' : '确认修改')
+      )
+    )
+  );
+}
+
+function HelpGuideModal({ visible, onClose }) {
+  const [guideTab, setGuideTab] = useState('methodology');
+  if (!visible) return null;
+
+  return React.createElement('div', {className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&onClose()},
+    React.createElement('div', {className:'modal', style:{maxWidth:850, width:'92vw', maxHeight:'88vh', display:'flex', flexDirection:'column'}},
+      React.createElement('div', {style:{display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:'1px solid #e2e8f0', paddingBottom:12, marginBottom:16}},
+        React.createElement('h3', {style:{margin:0, display:'flex', alignItems:'center', gap:8, fontSize:18}},
+          '💡 LightPulse 快速上手指南与架构方法论'),
+        React.createElement('button', {className:'btn small', onClick:onClose, style:{fontSize:14, padding:'2px 8px'}}, '✕')
+      ),
+      React.createElement('div', {className:'tab-bar', style:{marginBottom:16, borderBottom:'1px solid #e2e8f0'}},
+        [
+          {key:'methodology', label:'🚀 轻量落地 3 步法'},
+          {key:'cluster', label:'🛡️ 集群多节点防重 (Leader选举)'},
+          {key:'token', label:'🔐 动态 Token 与独立全新会话'},
+          {key:'troubleshoot', label:'🛠️ 常见故障诊断与自愈'}
+        ].map(t => React.createElement('button', {
+          key: t.key,
+          className: 'tab' + (guideTab === t.key ? ' active' : ''),
+          onClick: () => setGuideTab(t.key),
+          style: {padding:'6px 14px', fontSize:13}
+        }, t.label))
+      ),
+      React.createElement('div', {style:{flex:1, overflowY:'auto', paddingRight:6, fontSize:13, lineHeight:1.7, color:'#334155'}},
+        guideTab === 'methodology' && React.createElement('div', {},
+          React.createElement('div', {style:{background:'#f8fafc', padding:14, borderRadius:6, border:'1px solid #e2e8f0', marginBottom:16}},
+            React.createElement('strong', {style:{color:'#0f172a', fontSize:14}}, '🎯 核心设计哲学：极小入侵、分组治理、零重复损耗'),
+            React.createElement('p', {style:{margin:'6px 0 0 0', color:'#64748b'}},
+              '无需引入臃肿笨重的全家桶，LightPulse 采用模块解耦架构，30 秒即可在生产或内网环境完成轻量化全栈运维体系的搭建。')
+          ),
+          React.createElement('div', {style:{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:12}},
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14, borderTop:'3px solid #3b82f6'}},
+              React.createElement('div', {style:{fontWeight:700, color:'#1e40af', marginBottom:6}}, '步骤 1: 探针一键接入'),
+              React.createElement('div', {style:{color:'#475569', fontSize:12, whiteSpace:'pre-line'}},
+                '• 模式A (独立运维黑盒探测): 直接运行 java -jar monitor-agent.jar -c config.json，兼任主机性能采集与外部接口巡检调度。\n• 模式B (微服务白盒增强): 现有业务添加 -javaagent:monitor-agent.jar，零代码自动采集接口 TPS/慢SQL/异常调用。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14, borderTop:'3px solid #10b981'}},
+              React.createElement('div', {style:{fontWeight:700, color:'#065f46', marginBottom:6}}, '步骤 2: 建立接口鉴权组'),
+              React.createElement('div', {style:{color:'#475569', fontSize:12, whiteSpace:'pre-line'}},
+                '• 避免接口各自死循环登录打爆鉴权中心，先在【接口巡检探活】中创建【校验组】。\n• 配置登录 URL、工号账号及动态 Secret，统一设置 Token 缓存期（如 4 小时）。\n• 下属所有 OpenAPI 接口均直接挂载该组，自动透明复用最新合法凭据。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14, borderTop:'3px solid #f59e0b'}},
+              React.createElement('div', {style:{fontWeight:700, color:'#92400e', marginBottom:6}}, '步骤 3: 挂载业务接口与调度'),
+              React.createElement('div', {style:{color:'#475569', fontSize:12, whiteSpace:'pre-line'}},
+                '• 在组下添加待巡检接口（如 KMS chatForEx），请求体填写业务参数。\n• 需要隔离会话时填入 ${UUID} 占位符，系统每次巡检自动生成隔离会话。\n• 集群部署默认勾选【集群单节点防重 (CLUSTER_SINGLE)】，多台机器绝不重复调用。')
+            )
+          )
+        )
+        || guideTab === 'cluster' && React.createElement('div', {},
+          React.createElement('div', {style:{background:'#eff6ff', padding:14, borderRadius:6, border:'1px solid #bfdbfe', marginBottom:16}},
+            React.createElement('strong', {style:{color:'#1e40af', fontSize:14}}, '🛡️ 集群多节点防重复调用的实现原理'),
+            React.createElement('p', {style:{margin:'6px 0 0 0', color:'#1e3a8a'}},
+              '业务系统在生产环境通常多机集群部署（例如 3 台机器）。如果每台机器都配置探针，如何防止外部接口同一时间被调用 3 次？')
+          ),
+          React.createElement('div', {style:{display:'flex', flexDirection:'column', gap:12}},
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#0f172a'}}, '1. 智能 Leader 选举机制 (零 Redis 依赖)'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569'}},
+                '探针拉取配置时会将当前机器的主机名 (hostName) 告知服务端。服务端在同一服务 (appName) 的全部在线存活实例中，按字典序选举第一台作为【当前集群 Leader 主机】。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#0f172a'}}, '2. 精准调度分流 (CLUSTER_SINGLE vs ALL_NODES)'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569', whiteSpace:'pre-line'}},
+                '• 【CLUSTER_SINGLE (单节点防重)】：默认开启。只有被选举为 Leader 的那 1 台机器会拉取并执行该接口探测；集群另外 2 台机器的配置列表中不会下发该探针，完全处于静默旁路，彻底解决集群并发重复调用的隐患。\n• 【ALL_NODES (全节点探测)】：针对本地进程探活场景（例如每台机器各自检查自身 127.0.0.1:8080/actuator/health 是否正常），可在配置中切换为全节点模式。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#0f172a'}}, '3. 节点宕机无缝秒级漂移'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569'}},
+                '当原 Leader 机器发生网络波动、宕机或下线时，服务端在心跳超时后自动将 Leader 身份移交给下一台存活节点。下一轮巡检自动由新 Leader 机器执行，全程自动化、高可用。')
+            )
+          )
+        )
+        || guideTab === 'token' && React.createElement('div', {},
+          React.createElement('div', {style:{background:'#f0fdf4', padding:14, borderRadius:6, border:'1px solid #bbf7d0', marginBottom:16}},
+            React.createElement('strong', {style:{color:'#166534', fontSize:14}}, '🔐 动态 Token 自动续期与独立会话隔离'),
+            React.createElement('p', {style:{margin:'6px 0 0 0', color:'#14532d'}},
+              '解决复杂的 OpenAPI 登录鉴权，兼顾安全性、缓存性能与巡检真实性。')
+          ),
+          React.createElement('div', {style:{display:'flex', flexDirection:'column', gap:12}},
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#0f172a'}}, '1. 动态登录与 Token 缓存 (如 4 小时)'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569'}},
+                '在校验组中配置登录 URL（如 /api/chatbot/kmsLogin/externalLogin）与凭证体（含工号 WB-4830 与通信 Secret）。Agent 首次探测时调用登录接口，根据 tokenPath（如 result.accessToken）解析 Token，并本地内存缓存 4 小时。在缓存期内所有接口复用此 Token，快过期前 5 分钟自动静默续签，保护登录接口不被高频压垮。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#0f172a'}}, '2. 会话隔离与动态参数占位符 (${UUID})'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569', whiteSpace:'pre-line'}},
+                '在很多外部 AI / 对话或业务系统中，如果固定写死 conversationId，每次探活都会向同一个历史会话追加脏数据。\nLightPulse 探针请求体原生支持 ${UUID} 与 ${TIMESTAMP} 动态占位符。例如：\n{"conversationId": "${UUID}", "messages": {"role": "user", "content": "系统健康检查探活"}}\n探针在每次发起 HTTP 请求前，会自动将 ${UUID} 替换为全新生成的随机唯一字符串，确保每次探测都是完全独立的全新会话！')
+            )
+          )
+        )
+        || guideTab === 'troubleshoot' && React.createElement('div', {},
+          React.createElement('div', {style:{background:'#fef2f2', padding:14, borderRadius:6, border:'1px solid #fecaca', marginBottom:16}},
+            React.createElement('strong', {style:{color:'#991b1b', fontSize:14}}, '🛠️ 常见故障原因与排查复盘'),
+            React.createElement('p', {style:{margin:'6px 0 0 0', color:'#7f1d1d'}},
+              '常见接口巡检异常状态码与对应速查处置方案。')
+          ),
+          React.createElement('div', {style:{display:'flex', flexDirection:'column', gap:12}},
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#dc2626'}}, '• 探活返回 HTTP 401 Unauthorized'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569', whiteSpace:'pre-line'}},
+                '原因：探针请求了受控制台登录拦截器保护的 API（如未带管理后台 Token 访问 /api/v1/probes）。\n处置：对自检探针，请使用公开免鉴权的轻量探活端点（如 /api/setup/status 或 Spring Actuator 的 /actuator/health）。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#dc2626'}}, '• 动态登录返回 secret error 或 500 异常'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569', whiteSpace:'pre-line'}},
+                '原因：第三方登录接口开启了服务端固定密钥比对校验（如 KMS 系统的 secret 字段）。\n处置：在校验组的【登录请求体】中补齐所需校验字段，如 {"workNo":"WB-4830", "secret":"kkjvnio2..."}。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#dc2626'}}, '• 错误提示 messages 不能为空 / 校验失败'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569', whiteSpace:'pre-line'}},
+                '原因：接口接收方实体类有严格的参数注解校验（例如 ConversationRequest 中 @NotNull private Message messages）。\n处置：请求体需满足业务对象嵌套结构，如 {"conversationId":"${UUID}", "messages":{"role":"user","content":"健康检查"}}。')
+            ),
+            React.createElement('div', {style:{background:'#fff', border:'1px solid #e2e8f0', borderRadius:6, padding:14}},
+              React.createElement('strong', {style:{color:'#dc2626'}}, '• Connection refused: getsockopt'),
+              React.createElement('div', {style:{marginTop:4, color:'#475569', whiteSpace:'pre-line'}},
+                '原因：目标系统所在端口（如 8080）未处于监听状态或目标进程尚未启动完成。\n处置：检查目标服务进程是否在运行，待目标服务启动就绪后探针会自动恢复正常。')
+            )
+          )
+        )
+      ),
+      React.createElement('div', {style:{borderTop:'1px solid #e2e8f0', paddingTop:12, marginTop:16, display:'flex', justifyContent:'flex-end'}},
+        React.createElement('button', {className:'btn primary', onClick:onClose, style:{padding:'6px 20px'}}, '我已了解')
+      )
+    )
+  );
+}
+
+// ====== 主应用 ======
+
+function App() {
+  const [tab, setTab] = useState('host-system');
+  const [apps, setApps] = useState([]);
+  const [currentApp, setCurrentApp] = useState(null);
+  const [dashData, setDashData] = useState({});
+  const [selectedEp, setSelectedEp] = useState(null);
+  const [epTrend, setEpTrend] = useState([]);
+  const [minutes, setMinutes] = useState(60);
+  const [unackedAlerts, setUnackedAlerts] = useState(0);
+
+  // 安装与底层存储向导状态
+  const [setupStatus, setSetupStatus] = useState(null);
+  const [showSetupModal, setShowSetupModal] = useState(false);
+  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+
+  const handleLogout = () => {
+    if (window.confirm('确认退出当前登录？')) {
+      api('/api/auth/logout', { method: 'POST' }).finally(() => {
+        localStorage.removeItem('LP_TOKEN');
+        localStorage.removeItem('LP_USER');
+        document.cookie = 'LP_TOKEN=; path=/; max-age=0';
+        window.location.replace(BASE + '/login.html');
+      });
+    }
+  };
+
+  const loadSetupStatus = useCallback(() => {
+    api('/api/setup/status').then(res => {
+      setSetupStatus(res);
+      if (res && res.initialized === false && !localStorage.getItem('LP_SETUP_DISMISSED')) {
+        setShowSetupModal(true);
+      }
+    }).catch(ignored => {});
+  }, []);
+
+  useEffect(() => {
+    loadSetupStatus();
+  }, [loadSetupStatus]);
+
+  // 加载未确认告警数
+  useEffect(() => {
+    api('/api/v1/alerts?acknowledged=0&page=1&size=1').then(r => {
+      setUnackedAlerts(r?.total||0);
+    });
+  }, [tab]);
+
+  const TAB_MAP = {
+    'host-system': '🖥️ 主机性能与容量',
+    'probes': '⚡ 接口巡检探活',
+    'alerts': '🚨 告警中心' + (unackedAlerts > 0 ? ' (' + unackedAlerts + ')' : ''),
+    'settings': '⚙️ 站点全局配置'
+  };
+
+  return React.createElement('div',{},
+    React.createElement('div',{className:'header'},
+      React.createElement('h1',{},'LightPulse 全景监控平台'),
+      React.createElement('span',{className:'sub', style:{marginLeft:10,fontSize:13,opacity:0.75}},'轻量全栈主机资源监控与接口巡检中心'),
+      React.createElement('div', {style:{marginLeft:'auto', display:'flex', alignItems:'center', gap:10}},
+        React.createElement('button', {
+          className:'btn small',
+          style:{background:'#0284c7', color:'#ffffff', borderColor:'#0369a1', fontWeight:600, display:'flex', alignItems:'center', gap:4},
+          onClick: () => setShowHelpModal(true)
+        }, '💡 快速上手指南 & 方法论'),
+        React.createElement('span', {style:{fontSize:13, color:'#cbd5e1', display:'flex', alignItems:'center', gap:6, marginLeft:4}},
+          '👤', React.createElement('strong', {style:{color:'#fff'}}, localStorage.getItem('LP_USER') || 'admin')),
+        React.createElement('button', {
+          className:'btn small',
+          style:{background:'#2d3748', color:'#f8fafc', borderColor:'#4a5568'},
+          onClick: () => setShowPwdModal(true)
+        }, '🔑 修改密码'),
+        React.createElement('button', {
+          className:'btn small danger',
+          onClick: handleLogout
+        }, '退出登录'))
+    ),
+    React.createElement('div',{className:'container'},
+      React.createElement('div',{className:'tab-bar'},
+        Object.entries(TAB_MAP).map(([k,v]) =>
+          React.createElement('button',{
+            key:k, className:'tab'+(tab===k?' active':''),
+            onClick:()=>{setTab(k)}
+          }, v))),
+      tab === 'host-system' && React.createElement(HostSystemTab)
+      || tab === 'probes' && React.createElement(ProbesTab)
+      || tab === 'alerts' && React.createElement(AlertsTab)
+      || tab === 'settings' && React.createElement(SettingsTab, {
+        setupStatus,
+        onOpenWizard: () => setShowSetupModal(true)
+      })
+    ),
+    React.createElement(SetupWizardModal, {
+      visible: showSetupModal,
+      currentStatus: setupStatus,
+      onSaved: () => {
+        localStorage.setItem('LP_SETUP_DISMISSED', 'true');
+        setShowSetupModal(false);
+        loadSetupStatus();
+      },
+      onClose: () => {
+        localStorage.setItem('LP_SETUP_DISMISSED', 'true');
+        setShowSetupModal(false);
+      }
+    }),
+    React.createElement(ChangePasswordModal, {
+      visible: showPwdModal,
+      onClose: () => setShowPwdModal(false)
+    }),
+    React.createElement(HelpGuideModal, {
+      visible: showHelpModal,
+      onClose: () => setShowHelpModal(false)
+    })
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>

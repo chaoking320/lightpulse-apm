@@ -1,0 +1,30 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Source code
+*.java text diff=java
+*.xml text
+*.yml text
+*.yaml text
+*.properties text
+*.json text
+*.md text
+*.sql text
+
+# Force LF line endings for Linux bash scripts and systemd unit files
+*.sh text eol=lf
+*.service text eol=lf
+*.bash text eol=lf
+
+# Batch files need CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.jar binary
+*.tar binary
+*.gz binary
+*.zip binary
+*.ico binary
+*.png binary
+*.jpg binary
