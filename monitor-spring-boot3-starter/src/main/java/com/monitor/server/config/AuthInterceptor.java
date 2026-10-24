@@ -80,6 +80,8 @@ public class AuthInterceptor implements HandlerInterceptor {
         return uri.endsWith("/login.html")
                 || uri.contains("/api/auth/login")
                 || uri.contains("/api/v1/auth/login")
+                || uri.contains("/api/auth/captcha")
+                || uri.contains("/api/v1/auth/captcha")
                 || uri.contains("/api/auth/status")
                 || uri.contains("/api/v1/auth/status")
                 || uri.contains("/api/setup/status")
