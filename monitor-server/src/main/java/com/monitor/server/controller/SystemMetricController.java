@@ -36,6 +36,7 @@ public class SystemMetricController {
     private final SiteSettingService siteSettingService;
     private final com.monitor.server.service.StorageEngineService storageEngineService;
     private final com.monitor.server.service.EsStorageService esStorageService;
+    private final com.monitor.server.repository.ApmHostConfigRepo hostConfigRepo;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /**
@@ -75,7 +76,10 @@ public class SystemMetricController {
             metric.setDiskDetails(diskJson);
             metric.setCreatedAt(LocalDateTime.now());
 
-            metricRepo.insert(metric);
+            // 纯 ES 模式下完全不写本地 MySQL，防止物理磁盘空间暴增
+            if (!storageEngineService.isPureEs()) {
+                metricRepo.insert(metric);
+            }
 
             // 收到主机指标上报，自动保活该机器的在线应用实例，彻底消除“指标在上报却误报离线”的假离线 Bug
             try {
@@ -105,7 +109,9 @@ public class SystemMetricController {
                         record.setTokenRefreshed(Boolean.TRUE.equals(pMap.get("tokenRefreshed")) ? 1 : 0);
                         record.setCreatedAt(LocalDateTime.now());
 
-                        probeRecordRepo.insert(record);
+                        if (!storageEngineService.isPureEs()) {
+                            probeRecordRepo.insert(record);
+                        }
                         probeRecords.add(record);
 
                         // 探针失败即时告警
@@ -146,13 +152,40 @@ public class SystemMetricController {
         }
     }
 
-    /**
-     * 提前感知：检测内存和磁盘是否超过风险阈值
+        /**
+     * 提前感知：检测CPU、内存和磁盘是否超过风险阈值 (支持 Host > Global 层级覆盖)
      */
     private void checkProactiveAlerts(ApmSystemMetric m, String diskJson) {
-        // 1. 内存持续高压预警 (> 90%)
+        com.monitor.server.entity.ApmHostConfig hostConfig = null;
+        try {
+            if (hostConfigRepo != null && m.getHostName() != null) {
+                hostConfig = hostConfigRepo.selectOne(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.monitor.server.entity.ApmHostConfig>()
+                                .eq(com.monitor.server.entity.ApmHostConfig::getHostName, m.getHostName()));
+            }
+        } catch (Exception ignored) {}
+
+        // 0. 系统 CPU 高压预警
+        double cpuThreshold = (hostConfig != null && hostConfig.getCpuThreshold() != null)
+                ? hostConfig.getCpuThreshold()
+                : siteSettingService.getCpuAlertThreshold();
+        if (m.getSystemCpuLoad() != null && m.getSystemCpuLoad() >= cpuThreshold) {
+            alertService.triggerAlert(
+                    "主机CPU负荷高压告警",
+                    m.getAppName(),
+                    m.getHostName() + " (" + m.getIpAddress() + ")",
+                    BigDecimal.valueOf(m.getSystemCpuLoad()),
+                    BigDecimal.valueOf(cpuThreshold),
+                    ">=",
+                    String.format("系统 CPU 使用率已达 %.1f%% (阈值 %.0f%%)，系统计算负荷过重，请排查高消耗进程！",
+                            m.getSystemCpuLoad(), cpuThreshold)
+            );
+        }
+
         // 1. 内存持续高压预警
-        double memThreshold = siteSettingService.getMemoryAlertThreshold();
+        double memThreshold = (hostConfig != null && hostConfig.getMemoryThreshold() != null)
+                ? hostConfig.getMemoryThreshold()
+                : siteSettingService.getMemoryAlertThreshold();
         if (m.getMemoryUsedPercent() != null && m.getMemoryUsedPercent() >= memThreshold) {
             alertService.triggerAlert(
                     "主机内存容量高压告警",
@@ -167,7 +200,9 @@ public class SystemMetricController {
         }
 
         // 2. 磁盘满载预警
-        double diskThreshold = siteSettingService.getDiskAlertThreshold();
+        double diskThreshold = (hostConfig != null && hostConfig.getDiskThreshold() != null)
+                ? hostConfig.getDiskThreshold()
+                : siteSettingService.getDiskAlertThreshold();
         if (diskJson != null && !diskJson.isEmpty() && !diskJson.equals("[]")) {
             try {
                 com.fasterxml.jackson.databind.JsonNode rootNode = objectMapper.readTree(diskJson);

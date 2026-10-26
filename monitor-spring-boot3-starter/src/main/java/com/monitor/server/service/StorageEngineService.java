@@ -27,6 +27,9 @@ public class StorageEngineService {
     private final ObjectMapper objectMapper;
     private final EsStorageService esStorageService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.core.env.Environment env;
+
     private static final String CONFIG_PATH = "data/storage-config.json";
 
     @Getter
@@ -49,6 +52,23 @@ public class StorageEngineService {
             } catch (Exception e) {
                 log.error("[Storage Engine] 读取存储引擎配置文件失败: {}", e.getMessage());
             }
+        } else if (env != null && env.containsProperty("monitor.storage.type")) {
+            String type = env.getProperty("monitor.storage.type", "EMBEDDED");
+            this.currentConfig.setStorageType(type);
+            this.currentConfig.setInitialized(true);
+            if (env.containsProperty("monitor.storage.es-url")) {
+                this.currentConfig.setEsUrl(env.getProperty("monitor.storage.es-url"));
+            }
+            if (env.containsProperty("monitor.storage.es-username")) {
+                this.currentConfig.setEsUsername(env.getProperty("monitor.storage.es-username"));
+            }
+            if (env.containsProperty("monitor.storage.es-password")) {
+                this.currentConfig.setEsPassword(env.getProperty("monitor.storage.es-password"));
+            }
+            if (env.containsProperty("monitor.storage.es-index-prefix")) {
+                this.currentConfig.setEsIndexPrefix(env.getProperty("monitor.storage.es-index-prefix"));
+            }
+            log.info("[Storage Engine] 已通过 Spring 环境变量加载存储配置: {}", type);
         } else {
             log.info("[Storage Engine] 自动激活默认【宿主数据库内置存储模式】");
             this.currentConfig.setInitialized(true);
@@ -137,6 +157,10 @@ public class StorageEngineService {
     public boolean isEsActive() {
         return "ELASTICSEARCH".equalsIgnoreCase(currentConfig.getStorageType()) ||
                "HYBRID".equalsIgnoreCase(currentConfig.getStorageType());
+    }
+
+    public boolean isPureEs() {
+        return "ELASTICSEARCH".equalsIgnoreCase(currentConfig.getStorageType());
     }
 
     public boolean isMysqlActive() {

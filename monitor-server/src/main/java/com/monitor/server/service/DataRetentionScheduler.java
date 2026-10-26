@@ -50,17 +50,21 @@ public class DataRetentionScheduler {
         log.info("[DataRetention] 开始执行历史过期数据清理巡检，当前保留周期: {} 天", retentionDays);
         LocalDateTime threshold = LocalDateTime.now().minusDays(retentionDays);
 
-        // 1. 若启用了 Elasticsearch 存储，调用 ES delete_by_query 清理 ES 过期索引
+                // 1. 若启用了 Elasticsearch 存储，按天滚动物理索引直接 DROP 清理（毫秒级无压力释放物理磁盘）
         if (storageEngineService.isEsActive()) {
-            esStorageService.cleanExpiredData(storageEngineService.getCurrentConfig(), retentionDays);
+            esStorageService.cleanExpiredIndices(storageEngineService.getCurrentConfig(), retentionDays);
         }
 
-        // 2. 清理本地数据库/H2 中的历史指标与巡检明细
+        // 2. 清理本地数据库中的历史指标与巡检明细（纯 ES 模式下本地无指标数据，跳过以节省数据库 IO）
         try {
-            int deletedMetrics = systemMetricRepo.delete(
-                    new LambdaQueryWrapper<ApmSystemMetric>().lt(ApmSystemMetric::getCreatedAt, threshold));
-            int deletedProbes = probeRecordRepo.delete(
-                    new LambdaQueryWrapper<ApmProbeRecord>().lt(ApmProbeRecord::getCreatedAt, threshold));
+            int deletedMetrics = 0;
+            int deletedProbes = 0;
+            if (!storageEngineService.isPureEs()) {
+                deletedMetrics = systemMetricRepo.delete(
+                        new LambdaQueryWrapper<ApmSystemMetric>().lt(ApmSystemMetric::getCreatedAt, threshold));
+                deletedProbes = probeRecordRepo.delete(
+                        new LambdaQueryWrapper<ApmProbeRecord>().lt(ApmProbeRecord::getCreatedAt, threshold));
+            }
             // 已确认且超过保留周期的历史告警
             int deletedAlerts = alertRecordRepo.delete(
                     new LambdaQueryWrapper<ApmAlertRecord>()

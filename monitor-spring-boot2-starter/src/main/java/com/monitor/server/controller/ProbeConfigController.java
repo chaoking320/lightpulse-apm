@@ -37,6 +37,9 @@ public class ProbeConfigController {
     private final ApmApplicationRepo applicationRepo;
     private final ObjectMapper objectMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final com.monitor.server.service.StorageEngineService storageEngineService;
+    private final com.monitor.server.service.EsStorageService esStorageService;
+    private final com.monitor.server.repository.ApmHostConfigRepo hostConfigRepo;
 
     @PostConstruct
     public void initDbAndPreload() {
@@ -91,6 +94,20 @@ public class ProbeConfigController {
                     description                 VARCHAR(500),
                     created_at                  DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at                  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+            """);
+
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS apm_host_config (
+                    id                          BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    host_name                   VARCHAR(100) NOT NULL,
+                    cpu_threshold               DOUBLE DEFAULT NULL,
+                    memory_threshold            DOUBLE DEFAULT NULL,
+                    disk_threshold              DOUBLE DEFAULT NULL,
+                    remark                      VARCHAR(255) DEFAULT NULL,
+                    created_at                  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at                  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_host_name (host_name)
                 )
             """);
 
@@ -484,6 +501,10 @@ public class ProbeConfigController {
             @RequestParam(value = "probeName", required = false) String probeName,
             @RequestParam(value = "isSuccess", required = false) Integer isSuccess) {
 
+        if (storageEngineService.isPureEs()) {
+            return esStorageService.queryProbeRecords(null, probeName, isSuccess, page, size, storageEngineService.getCurrentConfig());
+        }
+
         var queryWrapper = new LambdaQueryWrapper<ApmProbeRecord>();
         if (probeName != null && !probeName.isBlank()) {
             queryWrapper.eq(ApmProbeRecord::getProbeName, probeName.trim());
@@ -518,6 +539,15 @@ public class ProbeConfigController {
      */
     @GetMapping("/system-metrics/hosts")
     public Map<String, Object> getLatestHostMetrics() {
+        if (storageEngineService.isEsActive()) {
+            List<ApmSystemMetric> esMetrics = esStorageService.queryLatestForEachHost(storageEngineService.getCurrentConfig());
+            if (esMetrics != null && !esMetrics.isEmpty()) {
+                return Map.of("code", 200, "data", esMetrics);
+            }
+            if (storageEngineService.isPureEs()) {
+                return Map.of("code", 200, "data", Collections.emptyList());
+            }
+        }
         List<ApmSystemMetric> hosts = systemMetricRepo.selectLatestForEachHost();
         return Map.of("code", 200, "data", hosts);
     }
@@ -529,6 +559,15 @@ public class ProbeConfigController {
     public Map<String, Object> getHostHistory(
             @RequestParam("hostName") String hostName,
             @RequestParam(value = "minutes", defaultValue = "60") int minutes) {
+        if (storageEngineService.isEsActive()) {
+            List<ApmSystemMetric> esHistory = esStorageService.queryHostHistory(hostName, Math.min(minutes, 1440), storageEngineService.getCurrentConfig());
+            if (esHistory != null && !esHistory.isEmpty()) {
+                return Map.of("code", 200, "data", esHistory);
+            }
+            if (storageEngineService.isPureEs()) {
+                return Map.of("code", 200, "data", Collections.emptyList());
+            }
+        }
         List<ApmSystemMetric> history = systemMetricRepo.selectRecentMetrics(hostName, Math.min(minutes, 1440));
         return Map.of("code", 200, "data", history);
     }
@@ -555,4 +594,60 @@ public class ProbeConfigController {
         log.info("已精准移除主机节点: app={}, host={}, ip={}, 删除历史指标数={}", appName, hostName, ipAddress, count);
         return Map.of("code", 200, "deleted", count, "message", "已成功移除该主机及其历史指标数据！");
     }
+
+    /**
+     * 控制台：查询所有主机的独立告警配置
+     */
+    @GetMapping("/host-configs")
+    public Map<String, Object> listHostConfigs() {
+        List<com.monitor.server.entity.ApmHostConfig> list = hostConfigRepo.selectList(null);
+        return Map.of("code", 200, "data", list != null ? list : Collections.emptyList());
+    }
+
+    /**
+     * 控制台：查询单个主机的独立告警配置
+     */
+    @GetMapping("/host-config")
+    public Map<String, Object> getHostConfig(@RequestParam("hostName") String hostName) {
+        com.monitor.server.entity.ApmHostConfig config = hostConfigRepo.selectOne(
+                new LambdaQueryWrapper<com.monitor.server.entity.ApmHostConfig>()
+                        .eq(com.monitor.server.entity.ApmHostConfig::getHostName, hostName));
+        return Map.of("code", 200, "data", config != null ? config : Map.of("hostName", hostName));
+    }
+
+    /**
+     * 控制台：保存/更新主机独立告警配置
+     */
+    @PostMapping("/host-config")
+    public Map<String, Object> saveHostConfig(@RequestBody com.monitor.server.entity.ApmHostConfig config) {
+        if (config.getHostName() == null || config.getHostName().isBlank()) {
+            return Map.of("code", 400, "message", "hostName 不能为空");
+        }
+        com.monitor.server.entity.ApmHostConfig existing = hostConfigRepo.selectOne(
+                new LambdaQueryWrapper<com.monitor.server.entity.ApmHostConfig>()
+                        .eq(com.monitor.server.entity.ApmHostConfig::getHostName, config.getHostName()));
+        if (existing != null) {
+            existing.setCpuThreshold(config.getCpuThreshold());
+            existing.setMemoryThreshold(config.getMemoryThreshold());
+            existing.setDiskThreshold(config.getDiskThreshold());
+            existing.setRemark(config.getRemark());
+            existing.setUpdatedAt(LocalDateTime.now());
+            hostConfigRepo.updateById(existing);
+        } else {
+            config.setCreatedAt(LocalDateTime.now());
+            config.setUpdatedAt(LocalDateTime.now());
+            hostConfigRepo.insert(config);
+        }
+        return Map.of("code", 200, "message", "主机阈值配置已保存");
+    }
+
+    /**
+     * 控制台：删除主机独立告警配置（恢复默认继承全局设置）
+     */
+    @DeleteMapping("/host-config/{id}")
+    public Map<String, Object> deleteHostConfig(@PathVariable("id") Long id) {
+        hostConfigRepo.deleteById(id);
+        return Map.of("code", 200, "message", "已恢复为全局默认阈值配置");
+    }
+
 }

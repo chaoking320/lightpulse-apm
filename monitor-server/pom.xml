@@ -11,7 +11,7 @@
     </parent>
     <groupId>com.monitor</groupId>
     <artifactId>monitor-server</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>0.0.7</version>
     <name>Monitor Server</name>
     <description>APM 监控中心 - 接收 Agent 上报，提供看板</description>
     <properties>

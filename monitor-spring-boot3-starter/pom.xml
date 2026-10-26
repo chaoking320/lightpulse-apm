@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.github.chaoking320</groupId>
     <artifactId>monitor-spring-boot3-starter</artifactId>
-    <version>0.0.4</version>
+    <version>0.0.7</version>
     <packaging>jar</packaging>
     <name>LightPulse APM Spring Boot 3 Starter</name>
     <description>LightPulse APM monitoring center starter for Spring Boot 3.x projects</description>

@@ -6,7 +6,7 @@
 
     <groupId>io.github.chaoking320</groupId>
     <artifactId>lightpulse-apm</artifactId>
-    <version>1.0.0</version>
+    <version>0.0.7</version>
     <packaging>pom</packaging>
 
     <name>LightPulse APM</name>
