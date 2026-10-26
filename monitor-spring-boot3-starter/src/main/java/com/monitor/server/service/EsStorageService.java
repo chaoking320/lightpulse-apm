@@ -270,7 +270,8 @@ public class EsStorageService {
             String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
             String alias = prefix + "metrics";
 
-            // 查询最近 24 小时各主机最新状态，按 hostName 进行 terms 聚合 + top_hits 取第 1 条
+            // 查询最近 24 小时各主机最新状态，按 [ipAddress, appName, hostName] 进行 composite 复合聚合 + top_hits 取第 1 条
+            // 确保不同物理节点/虚拟节点独立呈现，防止多台机器默认主机名为 localhost 导致相互覆盖
             String queryJson = """
                 {
                   "size": 0,
@@ -281,9 +282,13 @@ public class EsStorageService {
                   },
                   "aggs": {
                     "by_host": {
-                      "terms": {
-                        "field": "hostName",
-                        "size": 300
+                      "composite": {
+                        "size": 300,
+                        "sources": [
+                          { "ip": { "terms": { "field": "ipAddress", "missing_bucket": true } } },
+                          { "app": { "terms": { "field": "appName", "missing_bucket": true } } },
+                          { "host": { "terms": { "field": "hostName", "missing_bucket": true } } }
+                        ]
                       },
                       "aggs": {
                         "latest": {
@@ -307,25 +312,113 @@ public class EsStorageService {
 
             HttpResponse<String> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
             if (resp.statusCode() == 200) {
-                JsonNode root = objectMapper.readTree(resp.body());
-                JsonNode buckets = root.path("aggregations").path("by_host").path("buckets");
-                if (buckets.isArray()) {
-                    for (JsonNode b : buckets) {
-                        JsonNode hits = b.path("latest").path("hits").path("hits");
-                        if (hits.isArray() && hits.size() > 0) {
-                            JsonNode src = hits.get(0).path("_source");
-                            ApmSystemMetric m = parseMetricFromEsSource(src);
-                            if (m != null) result.add(m);
-                        }
-                    }
-                }
+                parseLatestBuckets(resp.body(), result);
             } else {
-                log.warn("[ES Storage] 聚合查询各主机最新状态响应码 {}: {}", resp.statusCode(), resp.body());
+                // 如果当前字段是非 keyword 类型（如历史遗留的旧索引），降级使用 .keyword 字段重新聚合
+                log.warn("[ES Storage] 复合聚合查询各主机最新状态响应码 {}: {}，尝试使用 keyword 字段降级查询", resp.statusCode(), resp.body());
+                String fallbackQuery = """
+                    {
+                      "size": 0,
+                      "query": {
+                        "range": {
+                          "@timestamp": { "gte": "now-24h" }
+                        }
+                      },
+                      "aggs": {
+                        "by_host": {
+                          "composite": {
+                            "size": 300,
+                            "sources": [
+                              { "ip": { "terms": { "field": "ipAddress.keyword", "missing_bucket": true } } },
+                              { "app": { "terms": { "field": "appName.keyword", "missing_bucket": true } } },
+                              { "host": { "terms": { "field": "hostName.keyword", "missing_bucket": true } } }
+                            ]
+                          },
+                          "aggs": {
+                            "latest": {
+                              "top_hits": {
+                                "sort": [{ "@timestamp": { "order": "desc" } }],
+                                "size": 1
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                    """;
+                HttpRequest.Builder fallbackReq = HttpRequest.newBuilder()
+                        .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                        .header("Content-Type", "application/json")
+                        .timeout(Duration.ofSeconds(5))
+                        .POST(HttpRequest.BodyPublishers.ofString(fallbackQuery, StandardCharsets.UTF_8));
+                addAuthHeader(fallbackReq, config.getEsUsername(), config.getEsPassword());
+                HttpResponse<String> fallbackResp = httpClient.send(fallbackReq.build(), HttpResponse.BodyHandlers.ofString());
+                if (fallbackResp.statusCode() == 200) {
+                    parseLatestBuckets(fallbackResp.body(), result);
+                }
             }
         } catch (Exception e) {
             log.error("[ES Storage] 从 ES 查询最新主机列表异常: {}", e.getMessage());
         }
         return result;
+    }
+
+    private void parseLatestBuckets(String responseBody, List<ApmSystemMetric> result) {
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            JsonNode buckets = root.path("aggregations").path("by_host").path("buckets");
+            if (buckets.isArray()) {
+                for (JsonNode b : buckets) {
+                    JsonNode hits = b.path("latest").path("hits").path("hits");
+                    if (hits.isArray() && hits.size() > 0) {
+                        JsonNode src = hits.get(0).path("_source");
+                        ApmSystemMetric m = parseMetricFromEsSource(src);
+                        if (m != null) result.add(m);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[ES Storage] 解析主机聚合结果异常: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 控制台：从 ES 异步清理指定主机的指标文档 (按 appName, hostName, ipAddress)
+     */
+    public void deleteHostMetrics(String appName, String hostName, String ipAddress, StorageEngineConfig config) {
+        CompletableFuture.runAsync(() -> {
+            if (config == null || config.getEsUrl() == null || config.getEsUrl().isBlank()) return;
+            try {
+                String cleanUrl = config.getEsUrl().endsWith("/") ? config.getEsUrl().substring(0, config.getEsUrl().length() - 1) : config.getEsUrl();
+                String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
+                String alias = prefix + "metrics";
+
+                List<String> conditions = new ArrayList<>();
+                if (hostName != null && !hostName.isBlank()) {
+                    conditions.add(String.format("{\"term\":{\"hostName\":\"%s\"}}", hostName));
+                }
+                if (appName != null && !appName.isBlank()) {
+                    conditions.add(String.format("{\"term\":{\"appName\":\"%s\"}}", appName));
+                }
+                if (ipAddress != null && !ipAddress.isBlank()) {
+                    conditions.add(String.format("{\"term\":{\"ipAddress\":\"%s\"}}", ipAddress));
+                }
+                if (conditions.isEmpty()) return;
+
+                String queryJson = String.format("{\"query\":{\"bool\":{\"must\":[%s]}}}", String.join(",", conditions));
+
+                HttpRequest.Builder req = HttpRequest.newBuilder()
+                        .uri(URI.create(cleanUrl + "/" + alias + "/_delete_by_query?conflicts=proceed"))
+                        .header("Content-Type", "application/json")
+                        .timeout(Duration.ofSeconds(10))
+                        .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
+                addAuthHeader(req, config.getEsUsername(), config.getEsPassword());
+                httpClient.send(req.build(), HttpResponse.BodyHandlers.discarding());
+                log.info("[ES Storage] 成功异步从 ES 移除主机指标: app={}, host={}, ip={}", appName, hostName, ipAddress);
+            } catch (Exception e) {
+                log.warn("[ES Storage] 从 ES 移除主机指标异常: {}", e.getMessage());
+            }
+        });
     }
 
     /**
