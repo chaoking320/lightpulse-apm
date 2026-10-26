@@ -622,6 +622,29 @@ function HostSystemTab() {
   const [searchText, setSearchText] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [expandedDisks, setExpandedDisks] = useState({});
+  const [editingHostConfig, setEditingHostConfig] = useState(null);
+  const handleEditHostConfig = (h) => {
+    api(`/api/v1/host-config?hostName=${encodeURIComponent(h.hostName)}`).then(res => {
+      const data = res?.data || {};
+      setEditingHostConfig({
+        hostName: h.hostName,
+        id: data.id || null,
+        cpuThreshold: data.cpuThreshold != null ? data.cpuThreshold : '',
+        memoryThreshold: data.memoryThreshold != null ? data.memoryThreshold : '',
+        diskThreshold: data.diskThreshold != null ? data.diskThreshold : '',
+        remark: data.remark || ''
+      });
+    }).catch(() => {
+      setEditingHostConfig({
+        hostName: h.hostName,
+        id: null,
+        cpuThreshold: '',
+        memoryThreshold: '',
+        diskThreshold: '',
+        remark: ''
+      });
+    });
+  };
 
   const load = () => {
     api('/api/v1/system-metrics/hosts').then(r => setHosts(r?.data || []));
@@ -766,7 +789,13 @@ function HostSystemTab() {
       ),
       React.createElement('td', {}, Math.floor((h.uptimeSeconds || 0) / 3600) + '小时'),
       React.createElement('td', {}, dayjs(h.createdAt).format('MM-DD HH:mm:ss')),
-      React.createElement('td', {},
+      React.createElement('td', {style:{whiteSpace:'nowrap'}},
+        React.createElement('button', {
+          className: 'btn small',
+          style: { marginRight: 6, padding: '2px 8px', fontSize: 11 },
+          title: '配置该主机的个性化告警阈值',
+          onClick: () => handleEditHostConfig(h)
+        }, '⚙️ 阈值'),
         React.createElement('button', {
           className: 'btn small',
           style: { color: '#ff4d4f', padding: '2px 8px', fontSize: 11 },
@@ -873,7 +902,87 @@ function HostSystemTab() {
                   ['主机名 / IP', '所属服务', '环境', '系统 CPU', '物理内存', '各挂载点磁盘容量', '运行时长', '最近上报', '操作'].map(th => React.createElement('th', {key:th}, th)))),
                 React.createElement('tbody', {}, list.map(renderHostRow))))
           );
-        })
+        },
+    // 主机个性化阈值配置 Modal
+    editingHostConfig && React.createElement('div', {className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&setEditingHostConfig(null)},
+      React.createElement('div', {className:'modal', style:{maxWidth:480}},
+        React.createElement('h3', {}, `⚙️ 主机告警阈值配置 - ${editingHostConfig.hostName}`),
+        React.createElement('div', {style:{fontSize:12,color:'#666',marginBottom:14,background:'#f0f5ff',padding:'8px 12px',borderRadius:4,border:'1px solid #d6e4ff'}},
+          '💡 提示：留空表示直接继承【站点全局设置】中的默认阈值。填写数值将单独对该主机生效 (优先级: 主机专属 > 站点全局)。'),
+        React.createElement('div', {className:'form-row', style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},
+          React.createElement('label', {style:{fontWeight:500}}, '系统 CPU 阈值 (%):'),
+          React.createElement('input', {
+            type:'number', min:1, max:100, placeholder:'继承全局(默认90%)',
+            value: editingHostConfig.cpuThreshold,
+            onChange: e => setEditingHostConfig({...editingHostConfig, cpuThreshold: e.target.value}),
+            style:{width:160,height:32,padding:'0 8px'}
+          })),
+        React.createElement('div', {className:'form-row', style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},
+          React.createElement('label', {style:{fontWeight:500}}, '内存使用率阈值 (%):'),
+          React.createElement('input', {
+            type:'number', min:1, max:100, placeholder:'继承全局(默认90%)',
+            value: editingHostConfig.memoryThreshold,
+            onChange: e => setEditingHostConfig({...editingHostConfig, memoryThreshold: e.target.value}),
+            style:{width:160,height:32,padding:'0 8px'}
+          })),
+        React.createElement('div', {className:'form-row', style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}},
+          React.createElement('label', {style:{fontWeight:500}}, '磁盘满载预警阈值 (%):'),
+          React.createElement('input', {
+            type:'number', min:1, max:100, placeholder:'继承全局(默认88%)',
+            value: editingHostConfig.diskThreshold,
+            onChange: e => setEditingHostConfig({...editingHostConfig, diskThreshold: e.target.value}),
+            style:{width:160,height:32,padding:'0 8px'}
+          })),
+        React.createElement('div', {className:'form-row', style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}},
+          React.createElement('label', {style:{fontWeight:500}}, '用途备注说明:'),
+          React.createElement('input', {
+            type:'text', placeholder:'如：核心生产KMS网关',
+            value: editingHostConfig.remark,
+            onChange: e => setEditingHostConfig({...editingHostConfig, remark: e.target.value}),
+            style:{width:160,height:32,padding:'0 8px'}
+          })),
+        React.createElement('div', {style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:20,borderTop:'1px solid #f0f0f0',paddingTop:14}},
+          editingHostConfig.id ? React.createElement('button', {
+            className:'btn', style:{color:'#ff4d4f'},
+            onClick: () => {
+              if (confirm('确认清除该主机的独立配置，恢复继承全局默认？')) {
+                api(`/api/v1/host-config/${editingHostConfig.id}`, {method:'DELETE'}).then(() => {
+                  alert('已恢复为全局默认！');
+                  setEditingHostConfig(null);
+                  load();
+                });
+              }
+            }
+          }, '恢复全局默认') : React.createElement('div', {}),
+          React.createElement('div', {style:{display:'flex',gap:10}},
+            React.createElement('button', {className:'btn', onClick:()=>setEditingHostConfig(null)}, '取消'),
+            React.createElement('button', {
+              className:'btn primary',
+              onClick: () => {
+                const payload = {
+                  hostName: editingHostConfig.hostName,
+                  cpuThreshold: editingHostConfig.cpuThreshold !== '' ? parseFloat(editingHostConfig.cpuThreshold) : null,
+                  memoryThreshold: editingHostConfig.memoryThreshold !== '' ? parseFloat(editingHostConfig.memoryThreshold) : null,
+                  diskThreshold: editingHostConfig.diskThreshold !== '' ? parseFloat(editingHostConfig.diskThreshold) : null,
+                  remark: editingHostConfig.remark || null
+                };
+                api('/api/v1/host-config', {
+                  method: 'POST',
+                  body: JSON.stringify(payload),
+                  headers: {'Content-Type': 'application/json'}
+                }).then(res => {
+                  alert(res.message || '保存成功！');
+                  setEditingHostConfig(null);
+                  load();
+                }).catch(err => {
+                  alert('保存失败: ' + err.message);
+                });
+              }
+            }, '保存配置')
+          )
+        )
+      )
+    )
   );
 }
 

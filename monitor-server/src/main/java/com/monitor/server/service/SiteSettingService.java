@@ -54,6 +54,7 @@ public class SiteSettingService {
         cache.put("heartbeat_timeout_seconds", "60");
         cache.put("disk_alert_threshold_percent", "88");
         cache.put("memory_alert_threshold_percent", "90");
+        cache.put("cpu_alert_threshold_percent", "90");
         cache.put("alert_silence_window_minutes", "30");
         cache.put("victoriametrics_url", defaultVmUrl != null ? defaultVmUrl : "http://127.0.0.1:8428");
 
@@ -134,6 +135,10 @@ public class SiteSettingService {
 
     public double getMemoryAlertThreshold() {
         return parseDouble(cache.get("memory_alert_threshold_percent"), 90.0);
+    }
+
+    public double getCpuAlertThreshold() {
+        return parseDouble(cache.get("cpu_alert_threshold_percent"), 90.0);
     }
 
     public long getAlertSilenceWindowMs() {
