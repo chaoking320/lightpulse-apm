@@ -591,6 +591,10 @@ public class ProbeConfigController {
                     .eq(ApmApplication::getHostName, hostName));
         } catch (Exception ignored) {}
 
+        if (storageEngineService.isEsActive()) {
+            esStorageService.deleteHostMetrics(appName, hostName, ipAddress, storageEngineService.getCurrentConfig());
+        }
+
         log.info("已精准移除主机节点: app={}, host={}, ip={}, 删除历史指标数={}", appName, hostName, ipAddress, count);
         return Map.of("code", 200, "deleted", count, "message", "已成功移除该主机及其历史指标数据！");
     }
