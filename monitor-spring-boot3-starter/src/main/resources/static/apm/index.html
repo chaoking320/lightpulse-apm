@@ -912,7 +912,7 @@ function HostSystemTab() {
                   ['主机名 / IP', '所属服务', '环境', '系统 CPU', '物理内存', '各挂载点磁盘容量', '运行时长', '最近上报', '操作'].map(th => React.createElement('th', {key:th}, th)))),
                 React.createElement('tbody', {}, list.map(renderHostRow))))
           );
-        },
+        }),
     // 主机个性化阈值配置 Modal
     editingHostConfig && React.createElement('div', {className:'modal-overlay', onClick:e=>e.target===e.currentTarget&&setEditingHostConfig(null)},
       React.createElement('div', {className:'modal', style:{maxWidth:480}},
