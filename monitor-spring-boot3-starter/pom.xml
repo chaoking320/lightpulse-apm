@@ -9,7 +9,7 @@
     <packaging>jar</packaging>
     <name>LightPulse APM Spring Boot 3 Starter</name>
     <description>LightPulse APM monitoring center starter for Spring Boot 3.x projects</description>
-    <url>https://github.com/chaoking320/monitor-server-agent</url>
+    <url>https://github.com/chaoking320/lightpulse-apm</url>
 
     <licenses>
         <license>
@@ -28,9 +28,9 @@
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com/chaoking320/monitor-server-agent.git</connection>
-        <developerConnection>scm:git:ssh://github.com:chaoking320/monitor-server-agent.git</developerConnection>
-        <url>https://github.com/chaoking320/monitor-server-agent</url>
+        <connection>scm:git:git://github.com/chaoking320/lightpulse-apm.git</connection>
+        <developerConnection>scm:git:ssh://github.com:chaoking320/lightpulse-apm.git</developerConnection>
+        <url>https://github.com/chaoking320/lightpulse-apm</url>
     </scm>
 
     <properties>
