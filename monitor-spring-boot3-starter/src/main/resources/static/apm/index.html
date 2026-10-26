@@ -87,6 +87,16 @@ const BASE = (function() {
   return lastSlash > 0 ? p.substring(0, lastSlash) : '';
 })();
 
+// 优先接收 URL 中的 token 参数并同步写入 localStorage 与 Cookie，消除重定向死循环
+try {
+  const urlParams = new URLSearchParams(window.location.search);
+  const tokenParam = urlParams.get('token');
+  if (tokenParam) {
+    localStorage.setItem('LP_TOKEN', tokenParam);
+    document.cookie = `LP_TOKEN=${tokenParam}; path=/; max-age=604800; SameSite=Lax`;
+  }
+} catch(e) {}
+
 const TIME_OPTIONS = [
   {label:'15分钟',value:15},
   {label:'30分钟',value:30},

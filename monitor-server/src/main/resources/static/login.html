@@ -230,13 +230,20 @@ const BASE = (function() {
 (function checkExistingSession() {
   const token = localStorage.getItem('LP_TOKEN');
   if (token) {
+    document.cookie = `LP_TOKEN=${token}; path=/; max-age=604800; SameSite=Lax`;
     fetch(BASE + '/api/auth/status', {
       headers: { 'Authorization': 'Bearer ' + token, 'X-Token': token }
     }).then(res => res.json()).then(data => {
       if (data && data.code === 200 && data.data && data.data.authenticated) {
-        window.location.replace(BASE + '/index.html');
+        window.location.replace(BASE + '/index.html?token=' + encodeURIComponent(token));
+      } else {
+        localStorage.removeItem('LP_TOKEN');
+        document.cookie = 'LP_TOKEN=; path=/; max-age=0';
       }
-    }).catch(() => {});
+    }).catch(() => {
+      localStorage.removeItem('LP_TOKEN');
+      document.cookie = 'LP_TOKEN=; path=/; max-age=0';
+    });
   }
 })();
 
@@ -330,7 +337,7 @@ function handleLogin(event) {
 
       btn.innerText = '登录成功，正在进入...';
       setTimeout(() => {
-        window.location.replace(BASE + '/index.html');
+        window.location.replace(BASE + '/index.html?token=' + encodeURIComponent(token));
       }, 300);
     } else {
       btn.disabled = false;
