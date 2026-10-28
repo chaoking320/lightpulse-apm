@@ -496,7 +496,12 @@ public class LogCollector {
     private static void sendBatch(List<LogRecord> list) {
         if (agentConfig == null || list.isEmpty()) return;
         try {
-            String url = agentConfig.getServerUrl() + "/api/v1/agent/logs";
+            String baseUrl = agentConfig.getServerUrl();
+            if (baseUrl.endsWith("/apm")) {
+                baseUrl = baseUrl.substring(0, baseUrl.length() - 4);
+                agentConfig.setServerUrl(baseUrl);
+            }
+            String url = baseUrl + "/api/v1/agent/logs";
             HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
             conn.setRequestMethod("POST");
             conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
