@@ -723,8 +723,8 @@ public class EsStorageService {
             }
 
             // 时间范围
-            String timeRangeStart = (startTime != null && !startTime.isBlank()) ? startTime : "now-1h";
-            String timeRangeEnd = (endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime)) ? endTime : "now+1d";
+            String timeRangeStart = normalizeEsDate(startTime, "now-1h");
+            String timeRangeEnd = normalizeEsDate(endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime) ? endTime : "now+5m", "now+5m");
             mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
 
             int safePage = Math.max(1, page);
@@ -813,8 +813,8 @@ public class EsStorageService {
                 String safeKw = keyword.replace("\"", "\\\"");
                 mustClauses.add("{\"match_phrase\":{\"content\":\"" + safeKw + "\"}}");
             }
-            String timeRangeStart = (startTime != null && !startTime.isBlank()) ? startTime : "now-1h";
-            String timeRangeEnd = (endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime)) ? endTime : "now+1d";
+            String timeRangeStart = normalizeEsDate(startTime, "now-1h");
+            String timeRangeEnd = normalizeEsDate(endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime) ? endTime : "now", "now");
             mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
 
             String safeInterval = (interval != null && !interval.isBlank()) ? interval : "1m";
@@ -832,7 +832,12 @@ public class EsStorageService {
                       "date_histogram": {
                         "field": "@timestamp",
                         "fixed_interval": "%s",
-                        "min_doc_count": 0
+                        "time_zone": "+08:00",
+                        "min_doc_count": 0,
+                        "extended_bounds": {
+                          "min": "%s",
+                          "max": "%s"
+                        }
                       },
                       "aggs": {
                         "by_level": {
@@ -844,7 +849,7 @@ public class EsStorageService {
                     }
                   }
                 }
-                """, String.join(",", mustClauses), safeInterval);
+                """, String.join(",", mustClauses), safeInterval, timeRangeStart, timeRangeEnd);
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
@@ -854,6 +859,43 @@ public class EsStorageService {
             addAuthHeader(reqBuilder, config.getEsUsername(), config.getEsPassword());
 
             HttpResponse<String> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                // 如果 ES 版本对 extended_bounds 兼容性较弱，降级重试标准 date_histogram
+                String fallbackQuery = String.format("""
+                    {
+                      "size": 0,
+                      "query": {
+                        "bool": {
+                          "must": [%s]
+                        }
+                      },
+                      "aggs": {
+                        "by_time": {
+                          "date_histogram": {
+                            "field": "@timestamp",
+                            "fixed_interval": "%s",
+                            "time_zone": "+08:00",
+                            "min_doc_count": 0
+                          },
+                          "aggs": {
+                            "by_level": {
+                              "terms": {
+                                "field": "logLevel"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                    """, String.join(",", mustClauses), safeInterval);
+                HttpRequest.Builder fbReq = HttpRequest.newBuilder()
+                        .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
+                        .header("Content-Type", "application/json")
+                        .timeout(Duration.ofSeconds(5))
+                        .POST(HttpRequest.BodyPublishers.ofString(fallbackQuery, StandardCharsets.UTF_8));
+                addAuthHeader(fbReq, config.getEsUsername(), config.getEsPassword());
+                resp = httpClient.send(fbReq.build(), HttpResponse.BodyHandlers.ofString());
+            }
             if (resp.statusCode() == 200) {
                 JsonNode root = objectMapper.readTree(resp.body());
                 JsonNode bucketsNode = root.path("aggregations").path("by_time").path("buckets");
@@ -1058,6 +1100,20 @@ public class EsStorageService {
             } catch (Exception ignored) {}
         }
         return m;
+    }
+
+    private String normalizeEsDate(String dateStr, String defaultValue) {
+        if (dateStr == null || dateStr.isBlank()) return defaultValue;
+        String trimmed = dateStr.trim();
+        if (trimmed.startsWith("now")) return trimmed;
+        if (trimmed.length() == 19 && trimmed.charAt(10) == ' ') {
+            return trimmed.replace(' ', 'T') + "+08:00";
+        } else if (trimmed.length() == 16 && trimmed.charAt(10) == 'T') {
+            return trimmed + ":00+08:00";
+        } else if (trimmed.length() == 19 && trimmed.charAt(10) == 'T' && !trimmed.contains("+") && !trimmed.endsWith("Z")) {
+            return trimmed + "+08:00";
+        }
+        return trimmed;
     }
 
     private void addAuthHeader(HttpRequest.Builder builder, String username, String password) {

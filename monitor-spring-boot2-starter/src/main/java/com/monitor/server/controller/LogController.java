@@ -102,19 +102,32 @@ public class LogController {
 
         List<ApmLogConfig> matched = new ArrayList<>();
         for (ApmLogConfig c : allActive) {
-            // 匹配应用
-            boolean appMatch = "*".equals(c.getAppName()) || (appName != null && appName.equalsIgnoreCase(c.getAppName()));
+            // 匹配应用（支持精确、前缀、模糊包含，解决节点名带后缀场景）
+            boolean appMatch = matchFuzzy(c.getAppName(), appName);
             if (!appMatch) continue;
 
-            // 匹配主机
-            boolean hostMatch = c.getHostName() == null || c.getHostName().isBlank() || "*".equals(c.getHostName())
-                    || (hostName != null && hostName.equalsIgnoreCase(c.getHostName()));
+            // 匹配主机（支持精确、前缀、通配符）
+            boolean hostMatch = matchFuzzy(c.getHostName(), hostName);
             if (!hostMatch) continue;
 
             matched.add(c);
         }
 
         return Map.of("code", 200, "data", matched);
+    }
+
+    private boolean matchFuzzy(String ruleVal, String agentVal) {
+        if (ruleVal == null || ruleVal.isBlank() || "*".equals(ruleVal)) return true;
+        if (agentVal == null || agentVal.isBlank() || "*".equals(agentVal)) return true;
+        if (ruleVal.equalsIgnoreCase(agentVal)) return true;
+
+        String r = ruleVal.trim().toLowerCase();
+        String a = agentVal.trim().toLowerCase();
+        if (r.contains("*") || r.contains("?")) {
+            String regex = "^" + r.replace(".", "\\.").replace("*", ".*").replace("?", ".") + "$";
+            return a.matches(regex);
+        }
+        return a.startsWith(r) || r.startsWith(a) || a.contains(r) || r.contains(a);
     }
 
     /**
@@ -199,7 +212,7 @@ public class LogController {
                 String sampleError = null;
 
                 for (ApmLogRecord r : records) {
-                    boolean appMatch = "*".equals(cfg.getAppName()) || cfg.getAppName().equalsIgnoreCase(r.getAppName());
+                    boolean appMatch = matchFuzzy(cfg.getAppName(), r.getAppName());
                     if (!appMatch) continue;
 
                     boolean fileMatch = cfg.getLogPath().equalsIgnoreCase(r.getLogPath());

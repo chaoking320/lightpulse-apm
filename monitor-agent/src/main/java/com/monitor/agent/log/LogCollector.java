@@ -130,6 +130,7 @@ public class LogCollector {
         private long currentSecond = 0;
         private int currentSecondLines = 0;
         private boolean rateLimitLogged = false;
+        private long lastWarnTime = 0;
 
         public FileTailer(LogConfig config) {
             this.config = config;
@@ -198,18 +199,25 @@ public class LogCollector {
                 File target = resolveTargetFile(config.getLogPath());
                 if (target == null || !target.exists()) {
                     closeRaf();
+                    long nowMs = System.currentTimeMillis();
+                    if (nowMs - lastWarnTime > 60000) {
+                        System.out.println("[LogCollector] 待命: 未找到匹配的活跃日志文件: " + config.getLogPath() + " (将在文件写入/生成时自动挂载)");
+                        lastWarnTime = nowMs;
+                    }
                     return;
                 }
 
-                // 检测是否发生了按天/按序号滚动（例如 jeecgboot-2026-10-27.15.log -> 16.log 或跨天新文件）
-                if (file != null && !target.getAbsolutePath().equals(file.getAbsolutePath())) {
-                    System.out.println("[LogCollector] 检测到最新活跃文件切换: [" + file.getName() + "] -> [" + target.getName() + "]，自动接力增量采集 ✓");
-                    flushMultilineRecord();
+                // 检测是否发生了按天/按序号滚动或首次锁定活跃文件
+                if (file == null || !target.getAbsolutePath().equals(file.getAbsolutePath())) {
+                    if (file != null) {
+                        System.out.println("[LogCollector] 检测到最新活跃文件切换: [" + file.getName() + "] -> [" + target.getName() + "]，自动接力增量采集 ✓");
+                        flushMultilineRecord();
+                    } else {
+                        System.out.println("[LogCollector] 成功锁定并挂载活跃日志文件: [" + target.getAbsolutePath() + "] (当前大小: " + target.length() + " 字节) ✓");
+                    }
                     closeRaf();
                     file = target;
-                    lastFileOffset = 0; // 新文件从头开始增量读
-                } else if (file == null) {
-                    file = target;
+                    lastFileOffset = (lastFileOffset >= 0) ? 0 : -1;
                 }
 
                 long curLen = file.length();
