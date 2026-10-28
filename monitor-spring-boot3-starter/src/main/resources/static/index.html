@@ -1790,6 +1790,752 @@ function SetupWizardModal({ visible, currentStatus, onSaved, onClose }) {
   );
 }
 
+// ====== 日志中心 (Log Explorer & Rules) ======
+function LogsTab() {
+  const [subTab, setSubTab] = useState('explore'); // 'explore' | 'configs'
+
+  // 元数据选项 (应用名、主机名、文件路径)
+  const [meta, setMeta] = useState({ appNames: [], hostNames: [], logPaths: [] });
+
+  // 检索筛选条件
+  const [appName, setAppName] = useState('');
+  const [hostName, setHostName] = useState('');
+  const [logPath, setLogPath] = useState('');
+  const [logLevel, setLogLevel] = useState('ALL');
+  const [keyword, setKeyword] = useState('');
+  const [traceId, setTraceId] = useState('');
+  const [timeRange, setTimeRange] = useState('1h');
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  // 查询结果与状态
+  const [loading, setLoading] = useState(false);
+  const [logsData, setLogsData] = useState({ total: 0, data: [] });
+  const [liveTail, setLiveTail] = useState(false);
+  const [expandedRows, setExpandedRows] = useState({});
+
+  // 上下文查看弹窗
+  const [contextModal, setContextModal] = useState({ visible: false, target: null, list: [], loading: false });
+
+  // 采集规则管理
+  const [configs, setConfigs] = useState([]);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const emptyConfig = {
+    ruleName: '', appName: '*', hostName: '*', logPath: '/data/logs/app.log',
+    collectMode: 'WARN_ERROR', keywordFilter: '', excludeKeyword: '',
+    contextLines: 10, maxRatePerSec: 200, alertEnabled: 0, alertThreshold: 5, enabled: 1
+  };
+  const [configForm, setConfigForm] = useState(emptyConfig);
+  const [editingConfigId, setEditingConfigId] = useState(null);
+
+  // 加载元数据选项
+  useEffect(() => {
+    api('/api/v1/logs/metadata').then(r => {
+      if (r && r.code === 200) {
+        setMeta({
+          appNames: r.appNames || [],
+          hostNames: r.hostNames || [],
+          logPaths: r.logPaths || []
+        });
+      }
+    }).catch(ignored => {});
+  }, []);
+
+  // 执行日志检索
+  const doSearch = useCallback((p = 1) => {
+    setLoading(true);
+    let start = 'now-1h';
+    if (timeRange === '15m') start = 'now-15m';
+    else if (timeRange === '6h') start = 'now-6h';
+    else if (timeRange === '24h') start = 'now-24h';
+
+    let url = `/api/v1/logs/search?page=${p}&size=${pageSize}&startTime=${encodeURIComponent(start)}&endTime=now`;
+    if (appName) url += `&appName=${encodeURIComponent(appName)}`;
+    if (hostName) url += `&hostName=${encodeURIComponent(hostName)}`;
+    if (logPath) url += `&logPath=${encodeURIComponent(logPath)}`;
+    if (logLevel && logLevel !== 'ALL') url += `&logLevel=${encodeURIComponent(logLevel)}`;
+    if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`;
+    if (traceId) url += `&traceId=${encodeURIComponent(traceId)}`;
+
+    api(url).then(r => {
+      if (r && r.code === 200) {
+        setLogsData(r);
+        setPage(p);
+      }
+    }).finally(() => setLoading(false));
+
+    // 同时拉取柱状图
+    let histUrl = `/api/v1/logs/histogram?startTime=${encodeURIComponent(start)}&endTime=now&interval=${timeRange === '15m' ? '30s' : timeRange === '1h' ? '1m' : '10m'}`;
+    if (appName) histUrl += `&appName=${encodeURIComponent(appName)}`;
+    if (hostName) histUrl += `&hostName=${encodeURIComponent(hostName)}`;
+    if (logPath) histUrl += `&logPath=${encodeURIComponent(logPath)}`;
+    if (keyword) histUrl += `&keyword=${encodeURIComponent(keyword)}`;
+
+    api(histUrl).then(r => {
+      if (r && r.code === 200 && r.buckets) {
+        renderHistogramChart(r.buckets);
+      }
+    }).catch(ignored => {});
+  }, [appName, hostName, logPath, logLevel, keyword, traceId, timeRange]);
+
+  useEffect(() => {
+    if (subTab === 'explore') {
+      doSearch(1);
+    }
+  }, [subTab, doSearch]);
+
+  // 实时 Tail 轮询 (每 3 秒刷新第一页)
+  useEffect(() => {
+    if (!liveTail || subTab !== 'explore') return;
+    const timer = setInterval(() => {
+      doSearch(1);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [liveTail, subTab, doSearch]);
+
+  // ECharts 柱状图渲染
+  const renderHistogramChart = (buckets) => {
+    const el = document.getElementById('log-histogram-chart');
+    if (!el || !window.echarts) return;
+    let chart = echarts.getInstanceByDom(el);
+    if (!chart) chart = echarts.init(el);
+
+    const times = buckets.map(b => b.time ? (b.time.length > 19 ? b.time.substring(11, 19) : b.time) : '');
+    const infos = buckets.map(b => b.info || 0);
+    const warns = buckets.map(b => b.warn || 0);
+    const errors = buckets.map(b => b.error || 0);
+
+    chart.setOption({
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { data: ['INFO', 'WARN', 'ERROR'], textStyle: { fontSize: 11 } },
+      grid: { left: '3%', right: '3%', bottom: '8%', top: '25%', containLabel: true },
+      xAxis: { type: 'category', data: times, axisLabel: { fontSize: 10 } },
+      yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { type: 'dashed' } } },
+      series: [
+        { name: 'INFO', type: 'bar', stack: 'total', data: infos, itemStyle: { color: '#10b981' } },
+        { name: 'WARN', type: 'bar', stack: 'total', data: warns, itemStyle: { color: '#f59e0b' } },
+        { name: 'ERROR', type: 'bar', stack: 'total', data: errors, itemStyle: { color: '#ef4444' } }
+      ]
+    });
+  };
+
+  // 查看上下文 (Show Context)
+  const openContext = (record) => {
+    setContextModal({ visible: true, target: record, list: [], loading: true });
+    // 优先从嵌入式上下文快照恢复
+    if (record.contextJson) {
+      try {
+        const rawLines = JSON.parse(record.contextJson);
+        if (Array.isArray(rawLines) && rawLines.length > 0) {
+          const list = rawLines.map((line, idx) => ({
+            lineNumber: (record.lineNumber || 0) - rawLines.length + idx,
+            content: line,
+            isTarget: false
+          }));
+          list.push({
+            lineNumber: record.lineNumber,
+            content: record.content,
+            isTarget: true
+          });
+          setContextModal({ visible: true, target: record, list, loading: false });
+          return;
+        }
+      } catch (ignored) {}
+    }
+
+    const url = `/api/v1/logs/context?appName=${encodeURIComponent(record.appName)}&hostName=${encodeURIComponent(record.hostName)}&logPath=${encodeURIComponent(record.logPath)}&lineNumber=${record.lineNumber || 0}&range=15`;
+    api(url).then(r => {
+      const records = (r && r.data) ? r.data : [];
+      setContextModal({
+        visible: true,
+        target: record,
+        list: records.map(rec => ({
+          ...rec,
+          isTarget: rec.lineNumber === record.lineNumber || rec.content === record.content
+        })),
+        loading: false
+      });
+    }).catch(e => {
+      setContextModal({ visible: true, target: record, list: [{ lineNumber: record.lineNumber, content: record.content, isTarget: true }], loading: false });
+    });
+  };
+
+  // 采集规则列表加载
+  const loadConfigs = useCallback(() => {
+    api('/api/v1/log-configs').then(r => {
+      if (r && r.data) setConfigs(r.data);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (subTab === 'configs') loadConfigs();
+  }, [subTab, loadConfigs]);
+
+  const handleSaveConfig = () => {
+    if (!configForm.ruleName || !configForm.logPath) {
+      alert('请填写规则名称与日志文件路径！');
+      return;
+    }
+    const isEdit = editingConfigId != null;
+    const url = isEdit ? `/api/v1/log-configs/${editingConfigId}` : '/api/v1/log-configs';
+    const method = isEdit ? 'PUT' : 'POST';
+
+    api(url, { method, body: JSON.stringify(configForm) }).then(() => {
+      setShowConfigModal(false);
+      loadConfigs();
+    });
+  };
+
+  const toggleConfig = (id) => {
+    api(`/api/v1/log-configs/${id}/toggle`, { method: 'POST' }).then(() => loadConfigs());
+  };
+
+  const deleteConfig = (id) => {
+    if (window.confirm('确认删除该日志采集规则？')) {
+      api(`/api/v1/log-configs/${id}`, { method: 'DELETE' }).then(() => loadConfigs());
+    }
+  };
+
+  const renderHighlightedContent = (text, kw) => {
+    if (!kw || !text) return text;
+    const parts = text.split(new RegExp(`(${kw.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')})`, 'gi'));
+    return parts.map((part, i) =>
+      part.toLowerCase() === kw.toLowerCase()
+        ? React.createElement('mark', { key: i, style: { background: '#fef08a', color: '#000', padding: '0 2px', borderRadius: 2 } }, part)
+        : part
+    );
+  };
+
+  return React.createElement('div', {},
+    // 顶部 Sub Tab
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginBottom: 16 } },
+      React.createElement('button', {
+        className: 'btn' + (subTab === 'explore' ? ' primary' : ''),
+        onClick: () => setSubTab('explore')
+      }, '🔍 日志探索大屏 (Explore)'),
+      React.createElement('button', {
+        className: 'btn' + (subTab === 'configs' ? ' primary' : ''),
+        onClick: () => setSubTab('configs')
+      }, '⚙️ 采集规则配置 (' + configs.length + ')')
+    ),
+
+    // SUBTAB 1: 日志探索大屏
+    subTab === 'explore' && React.createElement('div', {},
+      // 筛选工具栏
+      React.createElement('div', { className: 'chart-box', style: { padding: 14, marginBottom: 12 } },
+        React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' } },
+          // 应用选择
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+            React.createElement('span', { style: { fontSize: 13, color: '#64748b', fontWeight: 500 } }, '应用:'),
+            React.createElement('select', {
+              style: { padding: '5px 8px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 13 },
+              value: appName,
+              onChange: e => setAppName(e.target.value)
+            },
+              React.createElement('option', { value: '' }, '全部应用 (*)'),
+              meta.appNames.map(a => React.createElement('option', { key: a, value: a }, a))
+            )
+          ),
+          // 主机选择
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+            React.createElement('span', { style: { fontSize: 13, color: '#64748b', fontWeight: 500 } }, '主机:'),
+            React.createElement('select', {
+              style: { padding: '5px 8px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 13 },
+              value: hostName,
+              onChange: e => setHostName(e.target.value)
+            },
+              React.createElement('option', { value: '' }, '全部主机 (*)'),
+              meta.hostNames.map(h => React.createElement('option', { key: h, value: h }, h))
+            )
+          ),
+          // 文件路径选择
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+            React.createElement('span', { style: { fontSize: 13, color: '#64748b', fontWeight: 500 } }, '日志文件:'),
+            React.createElement('select', {
+              style: { padding: '5px 8px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 13, maxWidth: 220 },
+              value: logPath,
+              onChange: e => setLogPath(e.target.value)
+            },
+              React.createElement('option', { value: '' }, '全部文件 (*)'),
+              meta.logPaths.map(p => React.createElement('option', { key: p, value: p }, p))
+            )
+          ),
+          // 日志级别选择
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
+            ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'].map(lv =>
+              React.createElement('button', {
+                key: lv,
+                className: 'btn small' + (logLevel === lv ? ' primary' : ''),
+                style: {
+                  background: logLevel === lv ? (lv === 'ERROR' ? '#ef4444' : lv === 'WARN' ? '#f59e0b' : lv === 'INFO' ? '#10b981' : '#2563eb') : '#f8fafc',
+                  borderColor: logLevel === lv ? 'transparent' : '#cbd5e1',
+                  color: logLevel === lv ? '#fff' : '#475569',
+                  fontWeight: logLevel === lv ? 600 : 400
+                },
+                onClick: () => setLogLevel(lv)
+              }, lv)
+            )
+          ),
+          // 时间范围快捷选择
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' } },
+            ['15m', '1h', '6h', '24h'].map(t =>
+              React.createElement('button', {
+                key: t,
+                className: 'btn small' + (timeRange === t ? ' primary' : ''),
+                onClick: () => setTimeRange(t)
+              }, t)
+            )
+          )
+        ),
+
+        // 第二行：关键词搜索框 + TraceID + 查询按钮 + 实时 Tail
+        React.createElement('div', { style: { display: 'flex', gap: 10, marginTop: 10, alignItems: 'center' } },
+          React.createElement('input', {
+            style: { flex: 2, padding: '7px 12px', borderRadius: 4, border: '1px solid #cbd5e1', fontSize: 13 },
+            placeholder: '🔍 关键词匹配搜索 (支持 Exception, NPE, OrderFailed 等)...',
+            value: keyword,
+            onChange: e => setKeyword(e.target.value),
+            onKeyDown: e => { if (e.key === 'Enter') doSearch(1); }
+          }),
+          React.createElement('input', {
+            style: { flex: 1, padding: '7px 12px', borderRadius: 4, border: '1px solid #cbd5e1', fontSize: 13 },
+            placeholder: '🔗 TraceID 过滤 (精准追踪链路)...',
+            value: traceId,
+            onChange: e => setTraceId(e.target.value),
+            onKeyDown: e => { if (e.key === 'Enter') doSearch(1); }
+          }),
+          React.createElement('button', {
+            className: 'btn primary',
+            style: { padding: '7px 18px', fontWeight: 600 },
+            disabled: loading,
+            onClick: () => doSearch(1)
+          }, loading ? '检索中...' : '🔍 检索日志'),
+          React.createElement('button', {
+            className: 'btn',
+            style: {
+              padding: '7px 14px',
+              fontWeight: 600,
+              background: liveTail ? '#10b981' : '#f8fafc',
+              color: liveTail ? '#fff' : '#475569',
+              borderColor: liveTail ? '#059669' : '#cbd5e1'
+            },
+            onClick: () => setLiveTail(!liveTail)
+          }, liveTail ? '🟢 实时 Tail 中 (3s)' : '⚡ 开启实时 Tail')
+        )
+      ),
+
+      // 日志时间分布柱状图 (Log Volume)
+      React.createElement('div', { className: 'chart-box', style: { padding: 12, marginBottom: 12 } },
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 6 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#334155' } }, '📊 日志量时间分布趋势 (Log Volume Histogram)'),
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b' } }, '共匹配到 ' + (logsData.total || 0) + ' 条日志')
+        ),
+        React.createElement('div', { id: 'log-histogram-chart', style: { height: 130, width: '100%' } })
+      ),
+
+      // 类 Grafana 暗黑终端日志流
+      React.createElement('div', {
+        style: {
+          background: '#0f172a',
+          color: '#f8fafc',
+          borderRadius: 8,
+          padding: 16,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+          fontSize: 12,
+          lineHeight: '1.6'
+        }
+      },
+        // 终端顶栏
+        React.createElement('div', {
+          style: {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            borderBottom: '1px solid #334155',
+            paddingBottom: 10,
+            marginBottom: 10
+          }
+        },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: { color: '#38bdf8', fontWeight: 600 } }, '● TERMINAL LOG STREAM'),
+            React.createElement('span', { style: { color: '#94a3b8' } }, `| 第 ${page} 页 (共 ${logsData.total || 0} 条)`)
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
+            React.createElement('button', {
+              className: 'btn small',
+              style: { background: '#1e293b', color: '#f8fafc', borderColor: '#475569' },
+              disabled: page <= 1,
+              onClick: () => doSearch(page - 1)
+            }, '◀ 上一页'),
+            React.createElement('button', {
+              className: 'btn small',
+              style: { background: '#1e293b', color: '#f8fafc', borderColor: '#475569' },
+              disabled: (logsData.data || []).length < pageSize,
+              onClick: () => doSearch(page + 1)
+            }, '下一页 ▶')
+          )
+        ),
+
+        // 日志列表内容
+        (!logsData.data || logsData.data.length === 0)
+          ? React.createElement('div', { style: { textAlign: 'center', padding: '40px 0', color: '#64748b' } },
+              '⚠️ 暂无日志数据。请确认：1. 已在「采集规则配置」中启用目标路径；2. Agent 探针正常运行并已连接。')
+          : logsData.data.map((item, idx) => {
+              const lv = (item.logLevel || 'INFO').toUpperCase();
+              const lvColor = lv === 'ERROR' ? '#ef4444' : lv === 'WARN' ? '#f59e0b' : lv === 'DEBUG' ? '#94a3b8' : '#10b981';
+              const hasMultiline = item.content && item.content.includes('\n');
+              const isExpanded = expandedRows[idx];
+
+              let displayContent = item.content || '';
+              if (hasMultiline && !isExpanded) {
+                const lines = displayContent.split('\n');
+                displayContent = lines.slice(0, 2).join('\n') + `\n... (+ 展开堆栈剩余 ${lines.length - 2} 行)`;
+              }
+
+              return React.createElement('div', {
+                key: idx,
+                style: {
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '6px 8px',
+                  borderBottom: '1px solid #1e293b',
+                  background: isExpanded ? 'rgba(30, 41, 59, 0.4)' : 'transparent',
+                  borderRadius: 4
+                }
+              },
+                // 级别胶囊
+                React.createElement('span', {
+                  style: {
+                    background: lvColor,
+                    color: '#fff',
+                    padding: '1px 6px',
+                    borderRadius: 3,
+                    fontWeight: 700,
+                    fontSize: 10,
+                    minWidth: 46,
+                    textAlign: 'center'
+                  }
+                }, lv),
+                // 时间戳
+                React.createElement('span', { style: { color: '#64748b', minWidth: 140 } }, item.createdAt || ''),
+                // 主机 & 文件名
+                React.createElement('span', {
+                  style: {
+                    background: '#1e293b',
+                    color: '#38bdf8',
+                    padding: '0 5px',
+                    borderRadius: 3,
+                    fontSize: 11
+                  }
+                }, `${item.appName || ''} @ ${item.hostName || ''}`),
+                // TraceId (若有)
+                item.traceId && React.createElement('span', {
+                  style: {
+                    background: 'rgba(2, 132, 199, 0.2)',
+                    color: '#38bdf8',
+                    padding: '0 5px',
+                    borderRadius: 3,
+                    cursor: 'pointer',
+                    fontSize: 11
+                  },
+                  title: '点击以过滤该 TraceID',
+                  onClick: () => { setTraceId(item.traceId); doSearch(1); }
+                }, `tid:${item.traceId}`),
+                // 正文
+                React.createElement('div', {
+                  style: {
+                    flex: 1,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                    color: lv === 'ERROR' ? '#fca5a5' : '#f1f5f9'
+                  }
+                },
+                  renderHighlightedContent(displayContent, keyword),
+                  hasMultiline && React.createElement('span', {
+                    style: { color: '#38bdf8', cursor: 'pointer', marginLeft: 8, fontSize: 11 },
+                    onClick: () => setExpandedRows({ ...expandedRows, [idx]: !isExpanded })
+                  }, isExpanded ? '[- 收起堆栈]' : '[+ 展开完整堆栈]')
+                ),
+                // 操作按钮: 查看上下文
+                React.createElement('button', {
+                  className: 'btn small',
+                  style: {
+                    background: '#1e293b',
+                    color: '#38bdf8',
+                    borderColor: '#334155',
+                    fontSize: 11,
+                    whiteSpace: 'nowrap'
+                  },
+                  onClick: () => openContext(item)
+                }, '🔍 上下文')
+              );
+            })
+      )
+    ),
+
+    // SUBTAB 2: 日志采集规则配置
+    subTab === 'configs' && React.createElement('div', { className: 'table-wrap' },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 14 } },
+        React.createElement('h3', { style: { fontSize: 15, fontWeight: 600, color: '#1e293b' } }, '📋 日志采集规则配置列表'),
+        React.createElement('button', {
+          className: 'btn primary',
+          onClick: () => {
+            setEditingConfigId(null);
+            setConfigForm(emptyConfig);
+            setShowConfigModal(true);
+          }
+        }, '+ 新增采集规则')
+      ),
+      React.createElement('table', {},
+        React.createElement('thead', {},
+          React.createElement('tr', {},
+            React.createElement('th', {}, '规则名称'),
+            React.createElement('th', {}, '目标应用'),
+            React.createElement('th', {}, '目标主机'),
+            React.createElement('th', {}, '日志文件绝对路径'),
+            React.createElement('th', {}, '采集粒度'),
+            React.createElement('th', {}, '平替 mtail 告警'),
+            React.createElement('th', {}, '限流 (行/秒)'),
+            React.createElement('th', {}, '状态'),
+            React.createElement('th', {}, '操作')
+          )
+        ),
+        React.createElement('tbody', {},
+          configs.length === 0
+            ? React.createElement('tr', {}, React.createElement('td', { colSpan: 9, style: { textAlign: 'center', color: '#888', padding: 24 } }, '暂无规则，点击上方「新增采集规则」开启日志采集'))
+            : configs.map(c =>
+                React.createElement('tr', { key: c.id },
+                  React.createElement('td', { style: { fontWeight: 600 } }, c.ruleName),
+                  React.createElement('td', {}, React.createElement('span', { className: 'badge blue' }, c.appName)),
+                  React.createElement('td', {}, c.hostName || '*'),
+                  React.createElement('td', { style: { fontFamily: 'monospace', color: '#0369a1' } }, c.logPath),
+                  React.createElement('td', {},
+                    React.createElement('span', {
+                      className: 'badge ' + (c.collectMode === 'ALL' ? 'blue' : c.collectMode === 'ERROR_ONLY' ? 'red' : 'orange')
+                    }, c.collectMode === 'ALL' ? '全量同步' : c.collectMode === 'ERROR_ONLY' ? '仅 ERROR' : c.collectMode === 'KEYWORD' ? '关键词过滤' : 'WARN+ERROR')
+                  ),
+                  React.createElement('td', {},
+                    c.alertEnabled === 1
+                      ? React.createElement('span', { className: 'badge red' }, `开启 (>=${c.alertThreshold || 5}条/分)`)
+                      : React.createElement('span', { className: 'badge gray' }, '未开启')
+                  ),
+                  React.createElement('td', {}, `${c.maxRatePerSec || 200} 行/秒`),
+                  React.createElement('td', {},
+                    React.createElement('span', {
+                      className: 'badge ' + (c.enabled === 1 ? 'green' : 'gray'),
+                      style: { cursor: 'pointer' },
+                      onClick: () => toggleConfig(c.id)
+                    }, c.enabled === 1 ? '已启用 ✓' : '已停用 ⏸')
+                  ),
+                  React.createElement('td', {},
+                    React.createElement('div', { style: { display: 'flex', gap: 6 } },
+                      React.createElement('button', {
+                        className: 'btn small',
+                        onClick: () => {
+                          setEditingConfigId(c.id);
+                          setConfigForm({ ...c });
+                          setShowConfigModal(true);
+                        }
+                      }, '编辑'),
+                      React.createElement('button', {
+                        className: 'btn small danger',
+                        onClick: () => deleteConfig(c.id)
+                      }, '删除')
+                    )
+                  )
+                )
+              )
+        )
+      )
+    ),
+
+    // 上下文查看弹窗 (Context Modal)
+    contextModal.visible && React.createElement('div', { className: 'modal-overlay' },
+      React.createElement('div', {
+        className: 'modal',
+        style: {
+          width: 900,
+          background: '#0f172a',
+          color: '#f8fafc',
+          fontFamily: "'JetBrains Mono', 'Fira Code', monospace"
+        }
+      },
+        React.createElement('div', {
+          style: {
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            borderBottom: '1px solid #334155',
+            paddingBottom: 10,
+            marginBottom: 14
+          }
+        },
+          React.createElement('h3', { style: { margin: 0, color: '#38bdf8', fontSize: 14 } },
+            `🔍 事故现场前后文连续日志 [${contextModal.target?.logPath || ''}]`
+          ),
+          React.createElement('button', {
+            className: 'btn small',
+            style: { background: '#1e293b', color: '#fff', borderColor: '#475569' },
+            onClick: () => setContextModal({ visible: false, target: null, list: [], loading: false })
+          }, '✕ 关闭')
+        ),
+        contextModal.loading
+          ? React.createElement('div', { style: { textAlign: 'center', padding: 30, color: '#94a3b8' } }, '正在拉取上下文日志...')
+          : React.createElement('div', {
+              style: {
+                maxHeight: '65vh',
+                overflowY: 'auto',
+                fontSize: 12,
+                lineHeight: '1.6',
+                background: '#090d16',
+                padding: 12,
+                borderRadius: 6
+              }
+            },
+              contextModal.list.map((cRow, cIdx) =>
+                React.createElement('div', {
+                  key: cIdx,
+                  style: {
+                    display: 'flex',
+                    gap: 12,
+                    padding: '4px 6px',
+                    borderRadius: 3,
+                    background: cRow.isTarget ? 'rgba(239, 68, 68, 0.25)' : 'transparent',
+                    borderLeft: cRow.isTarget ? '3px solid #ef4444' : '3px solid transparent'
+                  }
+                },
+                  React.createElement('span', { style: { color: '#64748b', minWidth: 50, textAlign: 'right' } }, `#${cRow.lineNumber || cIdx + 1}`),
+                  cRow.isTarget && React.createElement('span', {
+                    style: { background: '#ef4444', color: '#fff', padding: '0 4px', borderRadius: 2, fontSize: 10, fontWeight: 700 }
+                  }, 'TARGET'),
+                  React.createElement('div', {
+                    style: {
+                      flex: 1,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-all',
+                      color: cRow.isTarget ? '#fca5a5' : '#cbd5e1'
+                    }
+                  }, cRow.content)
+                )
+              )
+            )
+      )
+    ),
+
+    // 规则编辑/新建弹窗 (Config Modal)
+    showConfigModal && React.createElement('div', { className: 'modal-overlay' },
+      React.createElement('div', { className: 'modal', style: { width: 620 } },
+        React.createElement('h3', {}, editingConfigId ? '编辑日志采集规则' : '新建日志采集规则'),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '规则名称:'),
+          React.createElement('input', {
+            style: { flex: 1 },
+            placeholder: '例如: KMS后端核心错误日志',
+            value: configForm.ruleName,
+            onChange: e => setConfigForm({ ...configForm, ruleName: e.target.value })
+          })
+        ),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '目标应用:'),
+          React.createElement('input', {
+            style: { flex: 1 },
+            placeholder: '* 通配所有应用，或填写具体 appName',
+            value: configForm.appName,
+            onChange: e => setConfigForm({ ...configForm, appName: e.target.value })
+          })
+        ),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '目标主机:'),
+          React.createElement('input', {
+            style: { flex: 1 },
+            placeholder: '* 通配所有主机，或指定单台机器 IP/主机名',
+            value: configForm.hostName,
+            onChange: e => setConfigForm({ ...configForm, hostName: e.target.value })
+          })
+        ),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '日志文件路径:'),
+          React.createElement('input', {
+            style: { flex: 1 },
+            placeholder: '绝对路径，例如: /data/logs/app.log 或 /var/log/nginx/error.log',
+            value: configForm.logPath,
+            onChange: e => setConfigForm({ ...configForm, logPath: e.target.value })
+          })
+        ),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '采集粒度:'),
+          React.createElement('select', {
+            style: { flex: 1 },
+            value: configForm.collectMode,
+            onChange: e => setConfigForm({ ...configForm, collectMode: e.target.value })
+          },
+            React.createElement('option', { value: 'WARN_ERROR' }, '推荐: 仅同步 WARN 和 ERROR (节省带宽与磁盘)'),
+            React.createElement('option', { value: 'ERROR_ONLY' }, '仅同步 ERROR 级别日志'),
+            React.createElement('option', { value: 'ALL' }, '全量同步 (同步该文件所有日志行)'),
+            React.createElement('option', { value: 'KEYWORD' }, '仅同步匹配指定关键字的行')
+          )
+        ),
+        configForm.collectMode === 'KEYWORD' && React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '关键字匹配:'),
+          React.createElement('input', {
+            style: { flex: 1 },
+            placeholder: '多个用 | 分隔，例如: Exception|Timeout|OOM',
+            value: configForm.keywordFilter || '',
+            onChange: e => setConfigForm({ ...configForm, keywordFilter: e.target.value })
+          })
+        ),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '排除关键字:'),
+          React.createElement('input', {
+            style: { flex: 1 },
+            placeholder: '包含此关键字的日志将自动丢弃 (如健康检查)',
+            value: configForm.excludeKeyword || '',
+            onChange: e => setConfigForm({ ...configForm, excludeKeyword: e.target.value })
+          })
+        ),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '平替 mtail 告警:'),
+          React.createElement('select', {
+            style: { width: 140 },
+            value: configForm.alertEnabled,
+            onChange: e => setConfigForm({ ...configForm, alertEnabled: parseInt(e.target.value) })
+          },
+            React.createElement('option', { value: 0 }, '关闭告警'),
+            React.createElement('option', { value: 1 }, '开启实时告警')
+          ),
+          configForm.alertEnabled === 1 && React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginLeft: 10 } },
+            React.createElement('span', { style: { fontSize: 13, color: '#64748b' } }, '1分钟内出现 >='),
+            React.createElement('input', {
+              type: 'number',
+              style: { width: 70 },
+              value: configForm.alertThreshold,
+              onChange: e => setConfigForm({ ...configForm, alertThreshold: parseInt(e.target.value) })
+            }),
+            React.createElement('span', { style: { fontSize: 13, color: '#64748b' } }, '条触发')
+          )
+        ),
+        React.createElement('div', { className: 'form-row' },
+          React.createElement('label', {}, '防刷限流:'),
+          React.createElement('input', {
+            type: 'number',
+            style: { width: 100 },
+            value: configForm.maxRatePerSec,
+            onChange: e => setConfigForm({ ...configForm, maxRatePerSec: parseInt(e.target.value) })
+          }),
+          React.createElement('span', { style: { fontSize: 12, color: '#888' } }, '行/秒 (单文件速率上限，保护业务与监控网卡)')
+        ),
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 } },
+          React.createElement('button', { className: 'btn', onClick: () => setShowConfigModal(false) }, '取消'),
+          React.createElement('button', { className: 'btn primary', onClick: handleSaveConfig }, '保存配置')
+        )
+      )
+    )
+  );
+}
+
+
 // ====== 站点全局配置 ======
 function SettingsTab({ setupStatus, onOpenWizard }) {
   const [form, setForm] = useState({
@@ -2225,6 +2971,7 @@ function App() {
   const TAB_MAP = {
     'host-system': '🖥️ 主机性能与容量',
     'probes': '⚡ 接口巡检探活',
+    'logs': '📜 日志中心 (Log Explorer)',
     'alerts': '🚨 告警中心' + (unackedAlerts > 0 ? ' (' + unackedAlerts + ')' : ''),
     'settings': '⚙️ 站点全局配置'
   };
@@ -2260,6 +3007,7 @@ function App() {
           }, v))),
       tab === 'host-system' && React.createElement(HostSystemTab)
       || tab === 'probes' && React.createElement(ProbesTab)
+      || tab === 'logs' && React.createElement(LogsTab)
       || tab === 'alerts' && React.createElement(AlertsTab)
       || tab === 'settings' && React.createElement(SettingsTab, {
         setupStatus,

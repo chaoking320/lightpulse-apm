@@ -2,6 +2,8 @@ package com.monitor.agent;
 
 import com.monitor.agent.config.AgentConfig;
 import com.monitor.agent.config.AgentConfigLoader;
+import com.monitor.agent.config.ConfigFetcher;
+import com.monitor.agent.log.LogCollector;
 import com.monitor.agent.probe.ProbeScheduler;
 import com.monitor.agent.system.SystemMetricsReporter;
 
@@ -69,29 +71,33 @@ public class AgentMain {
             if (!config.getProbes().isEmpty()) {
                 ProbeScheduler.updateProbes(config.getProbes());
             }
-
-            // 尝试从服务端同步动态下发的最新探针配置，并启动后台热更新线程
             try {
-                com.monitor.agent.config.ConfigFetcher.fetchProbes(config);
-                com.monitor.agent.config.ConfigFetcher.start(config);
-                System.out.println("[Monitor Agent] 接口巡检与配置远程热同步通道已就绪 ✓");
+                ConfigFetcher.fetchProbes(config);
             } catch (Exception ignored) {}
         } else {
             System.out.println("[Monitor Agent] 纯主机监控模式生效中，已跳过所有接口巡检调度");
         }
 
+        // 5. 初始化日志增量采集引擎与配置热同步通道
+        LogCollector.init(config);
+        try {
+            ConfigFetcher.fetchLogConfigs(config);
+        } catch (Exception ignored) {}
+        ConfigFetcher.start(config);
+
         System.out.println("[Monitor Agent] 探针启动完成 ✓ 耗时: " + (System.currentTimeMillis() - startTime) + "ms");
         System.out.println("[Monitor Agent] 守护进程运行中，按 Ctrl+C 可停止...");
 
-        // 5. 注册优雅下线 Hook
+        // 6. 注册优雅下线 Hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             System.out.println("\n[Monitor Agent] 正在安全停止监控探针...");
             SystemMetricsReporter.stop();
             ProbeScheduler.shutdown();
+            LogCollector.shutdown();
             System.out.println("[Monitor Agent] 已完全退出");
         }));
 
-        // 6. 守护主线程
+        // 7. 守护主线程
         try {
             Thread.currentThread().join();
         } catch (InterruptedException ignored) {}

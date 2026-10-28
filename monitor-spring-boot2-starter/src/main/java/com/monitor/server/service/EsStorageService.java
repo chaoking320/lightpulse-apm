@@ -3,6 +3,7 @@ package com.monitor.server.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.monitor.server.config.StorageEngineConfig;
+import com.monitor.server.entity.ApmLogRecord;
 import com.monitor.server.entity.ApmProbeRecord;
 import com.monitor.server.entity.ApmSystemMetric;
 import lombok.RequiredArgsConstructor;
@@ -104,6 +105,29 @@ public class EsStorageService {
 
             try {
                 // 1. 创建或更新 Index Template (自动为所有按天切分的索引绑定统一别名)
+                String mappingProps;
+                if ("logs".equals(mod)) {
+                    mappingProps = """
+                          "@timestamp": { "type": "date" },
+                          "appName": { "type": "keyword" },
+                          "hostName": { "type": "keyword" },
+                          "ipAddress": { "type": "keyword" },
+                          "logPath": { "type": "keyword" },
+                          "logLevel": { "type": "keyword" },
+                          "traceId": { "type": "keyword" },
+                          "lineNumber": { "type": "long" },
+                          "content": { "type": "text" },
+                          "contextJson": { "type": "text" }
+                        """;
+                } else {
+                    mappingProps = """
+                          "@timestamp": { "type": "date" },
+                          "appName": { "type": "keyword" },
+                          "hostName": { "type": "keyword" },
+                          "ipAddress": { "type": "keyword" }
+                        """;
+                }
+
                 String tplBody = String.format("""
                     {
                       "index_patterns": ["%s", "%s*"],
@@ -116,14 +140,11 @@ public class EsStorageService {
                       },
                       "mappings": {
                         "properties": {
-                          "@timestamp": { "type": "date" },
-                          "appName": { "type": "keyword" },
-                          "hostName": { "type": "keyword" },
-                          "ipAddress": { "type": "keyword" }
+                          %s
                         }
                       }
                     }
-                    """, pattern, alias, alias);
+                    """, pattern, alias, alias, mappingProps);
 
                 HttpRequest.Builder tplReq = HttpRequest.newBuilder()
                         .uri(URI.create(cleanUrl + "/_template/" + templateName))
@@ -566,6 +587,353 @@ public class EsStorageService {
             log.error("[ES Storage] 从 ES 查询拨测流水记录异常: {}", e.getMessage());
         }
         return result;
+    }
+
+    /**
+     * 批量将日志记录异步写入 Elasticsearch（Bulk API，按天滚动物理索引）
+     */
+    public CompletableFuture<Void> saveLogsBatch(List<ApmLogRecord> logs, StorageEngineConfig config) {
+        if (logs == null || logs.isEmpty()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.runAsync(() -> {
+            try {
+                if (config == null || config.getEsUrl() == null || config.getEsUrl().isBlank()) {
+                    return;
+                }
+                String cleanUrl = config.getEsUrl().endsWith("/") ? config.getEsUrl().substring(0, config.getEsUrl().length() - 1) : config.getEsUrl();
+                String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
+                String todayIndex = prefix + "logs-" + LocalDate.now().format(DATE_FMT);
+
+                StringBuilder ndjson = new StringBuilder();
+                String actionHeader = "{\"index\":{\"_index\":\"" + todayIndex + "\"}}\n";
+
+                for (ApmLogRecord r : logs) {
+                    Map<String, Object> doc = new LinkedHashMap<>();
+                    LocalDateTime ts = r.getCreatedAt() != null ? r.getCreatedAt() : LocalDateTime.now();
+                    doc.put("@timestamp", ts.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+                    doc.put("appName", r.getAppName());
+                    doc.put("hostName", r.getHostName());
+                    doc.put("ipAddress", r.getIpAddress());
+                    doc.put("logPath", r.getLogPath());
+                    doc.put("logLevel", r.getLogLevel() != null ? r.getLogLevel().toUpperCase() : "INFO");
+                    doc.put("traceId", r.getTraceId());
+                    doc.put("lineNumber", r.getLineNumber());
+                    doc.put("content", r.getContent());
+                    doc.put("contextJson", r.getContextJson());
+
+                    ndjson.append(actionHeader);
+                    ndjson.append(objectMapper.writeValueAsString(doc)).append("\n");
+                }
+
+                HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                        .uri(URI.create(cleanUrl + "/_bulk"))
+                        .header("Content-Type", "application/x-ndjson")
+                        .timeout(Duration.ofSeconds(8))
+                        .POST(HttpRequest.BodyPublishers.ofString(ndjson.toString(), StandardCharsets.UTF_8));
+
+                addAuthHeader(reqBuilder, config.getEsUsername(), config.getEsPassword());
+
+                HttpResponse<String> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() >= 300) {
+                    log.warn("[ES Storage] 批量写入日志至 ES 失败 HTTP {}: {}", resp.statusCode(), resp.body());
+                }
+            } catch (Exception e) {
+                log.error("[ES Storage] 批量写入日志至 ES 异常: {}", e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 控制台：从 ES 多条件检索日志列表
+     */
+    public Map<String, Object> queryLogs(String appName, String hostName, String ipAddress,
+                                         String logPath, String logLevel, String traceId,
+                                         String keyword, String startTime, String endTime,
+                                         int page, int size, StorageEngineConfig config) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("code", 200);
+        result.put("page", page);
+        result.put("size", size);
+        result.put("total", 0L);
+        result.put("data", Collections.emptyList());
+
+        if (config == null || config.getEsUrl() == null || config.getEsUrl().isBlank()) {
+            return result;
+        }
+        try {
+            String cleanUrl = config.getEsUrl().endsWith("/") ? config.getEsUrl().substring(0, config.getEsUrl().length() - 1) : config.getEsUrl();
+            String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
+            String alias = prefix + "logs";
+
+            List<String> mustClauses = new ArrayList<>();
+            if (appName != null && !appName.isBlank() && !"*".equals(appName)) {
+                mustClauses.add("{\"term\":{\"appName\":\"" + appName.trim() + "\"}}");
+            }
+            if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) {
+                mustClauses.add("{\"term\":{\"hostName\":\"" + hostName.trim() + "\"}}");
+            }
+            if (ipAddress != null && !ipAddress.isBlank()) {
+                mustClauses.add("{\"term\":{\"ipAddress\":\"" + ipAddress.trim() + "\"}}");
+            }
+            if (logPath != null && !logPath.isBlank()) {
+                mustClauses.add("{\"term\":{\"logPath\":\"" + logPath.trim() + "\"}}");
+            }
+            if (logLevel != null && !logLevel.isBlank() && !"ALL".equalsIgnoreCase(logLevel)) {
+                mustClauses.add("{\"term\":{\"logLevel\":\"" + logLevel.trim().toUpperCase() + "\"}}");
+            }
+            if (traceId != null && !traceId.isBlank()) {
+                mustClauses.add("{\"term\":{\"traceId\":\"" + traceId.trim() + "\"}}");
+            }
+            if (keyword != null && !keyword.isBlank()) {
+                String safeKw = keyword.replace("\"", "\\\"");
+                mustClauses.add("{\"match_phrase\":{\"content\":\"" + safeKw + "\"}}");
+            }
+
+            // 时间范围
+            String timeRangeStart = (startTime != null && !startTime.isBlank()) ? startTime : "now-1h";
+            String timeRangeEnd = (endTime != null && !endTime.isBlank()) ? endTime : "now";
+            mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
+
+            int safePage = Math.max(1, page);
+            int safeSize = Math.max(1, Math.min(size, 200));
+            int from = (safePage - 1) * safeSize;
+
+            String queryJson = String.format("""
+                {
+                  "from": %d,
+                  "size": %d,
+                  "query": {
+                    "bool": {
+                      "must": [%s]
+                    }
+                  },
+                  "sort": [
+                    { "@timestamp": { "order": "desc" } },
+                    { "lineNumber": { "order": "desc", "unmapped_type": "long" } }
+                  ]
+                }
+                """, from, safeSize, String.join(",", mustClauses));
+
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(6))
+                    .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
+            addAuthHeader(reqBuilder, config.getEsUsername(), config.getEsPassword());
+
+            HttpResponse<String> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                long total = root.path("hits").path("total").path("value").asLong(0);
+                JsonNode hits = root.path("hits").path("hits");
+                List<ApmLogRecord> records = new ArrayList<>();
+                if (hits.isArray()) {
+                    for (JsonNode h : hits) {
+                        JsonNode src = h.path("_source");
+                        ApmLogRecord lr = parseLogRecordFromEsSource(src);
+                        if (lr != null) records.add(lr);
+                    }
+                }
+                result.put("total", total);
+                result.put("data", records);
+            } else {
+                log.warn("[ES Storage] 查询日志响应异常 HTTP {}: {}", resp.statusCode(), resp.body());
+            }
+        } catch (Exception e) {
+            log.error("[ES Storage] 从 ES 查询日志异常: {}", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 控制台：查询日志量时间分布柱状图（对标 Grafana Loki Log Volume）
+     */
+    public Map<String, Object> queryLogHistogram(String appName, String hostName, String logPath,
+                                                 String keyword, String startTime, String endTime,
+                                                 String interval, StorageEngineConfig config) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("code", 200);
+        result.put("buckets", Collections.emptyList());
+
+        if (config == null || config.getEsUrl() == null || config.getEsUrl().isBlank()) {
+            return result;
+        }
+        try {
+            String cleanUrl = config.getEsUrl().endsWith("/") ? config.getEsUrl().substring(0, config.getEsUrl().length() - 1) : config.getEsUrl();
+            String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
+            String alias = prefix + "logs";
+
+            List<String> mustClauses = new ArrayList<>();
+            if (appName != null && !appName.isBlank() && !"*".equals(appName)) {
+                mustClauses.add("{\"term\":{\"appName\":\"" + appName.trim() + "\"}}");
+            }
+            if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) {
+                mustClauses.add("{\"term\":{\"hostName\":\"" + hostName.trim() + "\"}}");
+            }
+            if (logPath != null && !logPath.isBlank()) {
+                mustClauses.add("{\"term\":{\"logPath\":\"" + logPath.trim() + "\"}}");
+            }
+            if (keyword != null && !keyword.isBlank()) {
+                String safeKw = keyword.replace("\"", "\\\"");
+                mustClauses.add("{\"match_phrase\":{\"content\":\"" + safeKw + "\"}}");
+            }
+            String timeRangeStart = (startTime != null && !startTime.isBlank()) ? startTime : "now-1h";
+            String timeRangeEnd = (endTime != null && !endTime.isBlank()) ? endTime : "now";
+            mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
+
+            String safeInterval = (interval != null && !interval.isBlank()) ? interval : "1m";
+
+            String queryJson = String.format("""
+                {
+                  "size": 0,
+                  "query": {
+                    "bool": {
+                      "must": [%s]
+                    }
+                  },
+                  "aggs": {
+                    "by_time": {
+                      "date_histogram": {
+                        "field": "@timestamp",
+                        "fixed_interval": "%s",
+                        "min_doc_count": 0
+                      },
+                      "aggs": {
+                        "by_level": {
+                          "terms": {
+                            "field": "logLevel"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                """, String.join(",", mustClauses), safeInterval);
+
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(5))
+                    .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
+            addAuthHeader(reqBuilder, config.getEsUsername(), config.getEsPassword());
+
+            HttpResponse<String> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                JsonNode bucketsNode = root.path("aggregations").path("by_time").path("buckets");
+                List<Map<String, Object>> buckets = new ArrayList<>();
+                if (bucketsNode.isArray()) {
+                    for (JsonNode b : bucketsNode) {
+                        Map<String, Object> item = new LinkedHashMap<>();
+                        item.put("time", b.path("key_as_string").asText());
+                        item.put("total", b.path("doc_count").asLong(0));
+                        long infoCount = 0, warnCount = 0, errorCount = 0;
+                        JsonNode levels = b.path("by_level").path("buckets");
+                        if (levels.isArray()) {
+                            for (JsonNode lv : levels) {
+                                String key = lv.path("key").asText().toUpperCase();
+                                long cnt = lv.path("doc_count").asLong(0);
+                                if ("ERROR".equals(key)) errorCount += cnt;
+                                else if ("WARN".equals(key)) warnCount += cnt;
+                                else infoCount += cnt;
+                            }
+                        }
+                        item.put("info", infoCount);
+                        item.put("warn", warnCount);
+                        item.put("error", errorCount);
+                        buckets.add(item);
+                    }
+                }
+                result.put("buckets", buckets);
+            }
+        } catch (Exception e) {
+            log.error("[ES Storage] 查询日志直方图异常: {}", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 控制台：查询单条日志的关联前后文记录（基于 lineNumber 范围查询）
+     */
+    public List<ApmLogRecord> queryLogContext(String appName, String hostName, String logPath,
+                                              long targetLineNumber, int range, StorageEngineConfig config) {
+        List<ApmLogRecord> result = new ArrayList<>();
+        if (config == null || config.getEsUrl() == null || config.getEsUrl().isBlank()) {
+            return result;
+        }
+        try {
+            String cleanUrl = config.getEsUrl().endsWith("/") ? config.getEsUrl().substring(0, config.getEsUrl().length() - 1) : config.getEsUrl();
+            String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
+            String alias = prefix + "logs";
+
+            int safeRange = Math.max(5, Math.min(range, 50));
+            long minLine = Math.max(0, targetLineNumber - safeRange);
+            long maxLine = targetLineNumber + safeRange;
+
+            String queryJson = String.format("""
+                {
+                  "size": %d,
+                  "query": {
+                    "bool": {
+                      "must": [
+                        { "term": { "appName": "%s" } },
+                        { "term": { "hostName": "%s" } },
+                        { "term": { "logPath": "%s" } },
+                        { "range": { "lineNumber": { "gte": %d, "lte": %d } } }
+                      ]
+                    }
+                  },
+                  "sort": [
+                    { "lineNumber": { "order": "asc" } }
+                  ]
+                }
+                """, (safeRange * 2 + 1), appName, hostName, logPath, minLine, maxLine);
+
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .header("Content-Type", "application/json")
+                    .timeout(Duration.ofSeconds(5))
+                    .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
+            addAuthHeader(reqBuilder, config.getEsUsername(), config.getEsPassword());
+
+            HttpResponse<String> resp = httpClient.send(reqBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200) {
+                JsonNode root = objectMapper.readTree(resp.body());
+                JsonNode hits = root.path("hits").path("hits");
+                if (hits.isArray()) {
+                    for (JsonNode h : hits) {
+                        ApmLogRecord lr = parseLogRecordFromEsSource(h.path("_source"));
+                        if (lr != null) result.add(lr);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("[ES Storage] 从 ES 查询上下文异常: {}", e.getMessage());
+        }
+        return result;
+    }
+
+    private ApmLogRecord parseLogRecordFromEsSource(JsonNode src) {
+        if (src == null || src.isMissingNode()) return null;
+        ApmLogRecord lr = new ApmLogRecord();
+        lr.setAppName(src.path("appName").asText(""));
+        lr.setHostName(src.path("hostName").asText(""));
+        lr.setIpAddress(src.path("ipAddress").asText(""));
+        lr.setLogPath(src.path("logPath").asText(""));
+        lr.setLogLevel(src.path("logLevel").asText("INFO"));
+        lr.setTraceId(src.path("traceId").isNull() ? null : src.path("traceId").asText(null));
+        lr.setLineNumber(src.path("lineNumber").asLong(0));
+        lr.setContent(src.path("content").asText(""));
+        lr.setContextJson(src.path("contextJson").isNull() ? null : src.path("contextJson").asText(null));
+
+        String ts = src.path("@timestamp").asText();
+        if (!ts.isBlank()) {
+            try {
+                lr.setCreatedAt(LocalDateTime.parse(ts.length() > 19 ? ts.substring(0, 19) : ts, TIME_FMT));
+            } catch (Exception ignored) {}
+        }
+        return lr;
     }
 
     /**
