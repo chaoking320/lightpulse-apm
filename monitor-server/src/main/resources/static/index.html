@@ -145,9 +145,20 @@ const api = (path, opts) => {
     .then(r => {
       if (r.status === 401) {
         localStorage.removeItem('LP_TOKEN');
+        localStorage.removeItem('LP_USER');
+        localStorage.removeItem('LP_ROLE');
         document.cookie = 'LP_TOKEN=; path=/; max-age=0';
         window.location.replace(BASE + '/login.html');
         return Promise.reject(new Error('未登录或登录已过期'));
+      }
+      if (r.status === 403) {
+        return r.json().then(data => {
+          alert(data.message || '操作被拒绝：当前为只读账号 (viewer)，无权执行修改或删除操作！');
+          return Promise.reject(new Error(data.message || '403 Forbidden'));
+        }).catch(err => {
+          if (err.message && err.message !== '403 Forbidden') alert(err.message);
+          return Promise.reject(err);
+        });
       }
       return r.json();
     });
@@ -3035,6 +3046,7 @@ function App() {
       api('/api/auth/logout', { method: 'POST' }).finally(() => {
         localStorage.removeItem('LP_TOKEN');
         localStorage.removeItem('LP_USER');
+        localStorage.removeItem('LP_ROLE');
         document.cookie = 'LP_TOKEN=; path=/; max-age=0';
         window.location.replace(BASE + '/login.html');
       });
@@ -3052,6 +3064,12 @@ function App() {
 
   useEffect(() => {
     loadSetupStatus();
+    api('/api/auth/status').then(r => {
+      if (r && r.code === 200 && r.data) {
+        if (r.data.role) localStorage.setItem('LP_ROLE', r.data.role);
+        if (r.data.username) localStorage.setItem('LP_USER', r.data.username);
+      }
+    }).catch(ignored => {});
   }, [loadSetupStatus]);
 
   // 加载未确认告警数
@@ -3079,9 +3097,12 @@ function App() {
           style:{background:'#0284c7', color:'#ffffff', borderColor:'#0369a1', fontWeight:600, display:'flex', alignItems:'center', gap:4},
           onClick: () => setShowHelpModal(true)
         }, '💡 快速上手指南 & 方法论'),
+        ((localStorage.getItem('LP_ROLE') || 'ADMIN') === 'VIEWER') && React.createElement('span', {
+          style:{background:'linear-gradient(135deg, #f59e0b, #d97706)', color:'#fff', padding:'3px 10px', borderRadius:12, fontSize:12, fontWeight:700, display:'inline-flex', alignItems:'center', gap:4, boxShadow:'0 2px 4px rgba(217,119,6,0.3)'}
+        }, '👁️ 只读模式 (viewer)'),
         React.createElement('span', {style:{fontSize:13, color:'#cbd5e1', display:'flex', alignItems:'center', gap:6, marginLeft:4}},
-          '👤', React.createElement('strong', {style:{color:'#fff'}}, localStorage.getItem('LP_USER') || 'admin')),
-        React.createElement('button', {
+          '👤', React.createElement('strong', {style:{color:'#fff'}}, localStorage.getItem('LP_USER') || (((localStorage.getItem('LP_ROLE') || 'ADMIN') === 'VIEWER') ? 'viewer' : 'admin'))),
+        ((localStorage.getItem('LP_ROLE') || 'ADMIN') !== 'VIEWER') && React.createElement('button', {
           className:'btn small',
           style:{background:'#2d3748', color:'#f8fafc', borderColor:'#4a5568'},
           onClick: () => setShowPwdModal(true)

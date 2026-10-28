@@ -561,6 +561,7 @@ public class EsStorageService {
                 {
                   "from": %d,
                   "size": %d,
+                  "track_total_hits": true,
                   "query": {
                     "bool": {
                       "must": [%s]
@@ -718,8 +719,7 @@ public class EsStorageService {
                 mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"traceId\":\"" + safe + "\"}},{\"term\":{\"traceId.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (keyword != null && !keyword.isBlank()) {
-                String safeKw = keyword.replace("\"", "\\\"");
-                mustClauses.add("{\"match_phrase\":{\"content\":\"" + safeKw + "\"}}");
+                mustClauses.add(buildContentQuery(keyword));
             }
 
             // 时间范围
@@ -735,6 +735,7 @@ public class EsStorageService {
                 {
                   "from": %d,
                   "size": %d,
+                  "track_total_hits": true,
                   "query": {
                     "bool": {
                       "must": [%s]
@@ -810,8 +811,7 @@ public class EsStorageService {
                 mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logPath\":\"" + safe + "\"}},{\"term\":{\"logPath.keyword\":\"" + safe + "\"}},{\"wildcard\":{\"logPath.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"logPath\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (keyword != null && !keyword.isBlank()) {
-                String safeKw = keyword.replace("\"", "\\\"");
-                mustClauses.add("{\"match_phrase\":{\"content\":\"" + safeKw + "\"}}");
+                mustClauses.add(buildContentQuery(keyword));
             }
             String timeRangeStart = normalizeEsDate(startTime, "now-1h");
             String timeRangeEnd = normalizeEsDate(endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime) ? endTime : "now", "now");

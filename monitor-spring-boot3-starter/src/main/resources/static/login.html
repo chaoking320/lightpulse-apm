@@ -172,10 +172,10 @@
 
   <form id="loginForm" onsubmit="handleLogin(event)">
     <div class="form-group">
-      <label class="form-label">管理员账号</label>
+      <label class="form-label">登录账号</label>
       <div class="input-wrapper">
         <span class="input-icon">👤</span>
-        <input type="text" id="username" class="form-control" placeholder="请输入管理员账号" required autocomplete="username">
+        <input type="text" id="username" class="form-control" placeholder="管理员 admin 或只读账号 viewer" required autocomplete="username">
       </div>
     </div>
 
@@ -205,12 +205,12 @@
   </form>
 
   <div class="tips-box">
-    <div>🛡️ <strong>企业级监控安全保障</strong></div>
+    <div>🛡️ <strong>企业级统一登录与权限体系</strong></div>
     <div style="margin-top:4px;">
-      • 探针与主机 Agent 上报通道已自动加白，无惧网关拦截。
+      • <strong>超级管理员</strong>：默认 <code>admin</code> / <code>admin123</code>（具备全部管理与配置权限）。
     </div>
     <div style="margin-top:4px;">
-      • 登录控制台后，支持在右上角随时修改管理员密码。
+      • <strong>只读观察员</strong>：默认 <code>viewer</code> / <code>viewer123</code>（仅可查看监控数据，禁止修改或删除）。
     </div>
   </div>
 </div>
@@ -235,6 +235,8 @@ const BASE = (function() {
       headers: { 'Authorization': 'Bearer ' + token, 'X-Token': token }
     }).then(res => res.json()).then(data => {
       if (data && data.code === 200 && data.data && data.data.authenticated) {
+        if (data.data.username) localStorage.setItem('LP_USER', data.data.username);
+        if (data.data.role) localStorage.setItem('LP_ROLE', data.data.role);
         window.location.replace(BASE + '/index.html?token=' + encodeURIComponent(token));
       } else {
         localStorage.removeItem('LP_TOKEN');
@@ -333,6 +335,7 @@ function handleLogin(event) {
       // 写入 localStorage 和 Cookie
       localStorage.setItem('LP_TOKEN', token);
       localStorage.setItem('LP_USER', res.data.username || username);
+      localStorage.setItem('LP_ROLE', res.data.role || 'ADMIN');
       document.cookie = `LP_TOKEN=${token}; path=/; max-age=604800; SameSite=Lax`;
 
       btn.innerText = '登录成功，正在进入...';
