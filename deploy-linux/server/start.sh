@@ -5,7 +5,10 @@
 SERVER_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SERVER_DIR"
 
-JAR_NAME="monitor-server-1.0.0-SNAPSHOT.jar"
+JAR_NAME=$(ls monitor-server*.jar 2>/dev/null | grep -v sources | grep -v javadoc | head -n 1)
+if [ -z "$JAR_NAME" ]; then
+    JAR_NAME="monitor-server-0.0.8.jar"
+fi
 LOG_FILE="server.log"
 
 PID=$(ps -ef | grep "$JAR_NAME" | grep -v grep | awk '{print $2}')
