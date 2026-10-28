@@ -58,6 +58,22 @@ public class AuthInterceptor implements HandlerInterceptor {
         boolean isValid = authService.validateToken(token);
 
         if (isValid) {
+            String role = authService.getRole(token);
+            // 只读账号权限校验：禁止执行任何新增、修改或删除操作
+            if (AuthService.ROLE_VIEWER.equalsIgnoreCase(role)) {
+                String method = request.getMethod();
+                if ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method) || "DELETE".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method)) {
+                    // 放行登出接口
+                    if (uri.endsWith("/api/auth/logout") || uri.endsWith("/api/v1/auth/logout")) {
+                        return true;
+                    }
+                    log.warn("[Auth] 只读账号 (viewer) 尝试调用写接口被拒绝: URI={}, Method={}", uri, method);
+                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    response.setContentType("application/json;charset=UTF-8");
+                    response.getWriter().write("{\"code\":403,\"message\":\"操作被拒绝：当前登录为只读账号 (viewer)，无权执行新增、修改或删除操作！\"}");
+                    return false;
+                }
+            }
             return true;
         }
 

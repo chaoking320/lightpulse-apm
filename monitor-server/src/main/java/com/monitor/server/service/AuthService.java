@@ -17,12 +17,15 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 控制台安全登录与鉴权服务
- * 统一管理管理员密码验证、Token 签发、失效校验与密码重置
+ * 统一管理管理员密码验证、只读账号验证、Token 签发、失效校验与密码重置
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthService {
+
+    public static final String ROLE_ADMIN = "ADMIN";
+    public static final String ROLE_VIEWER = "VIEWER";
 
     private final ObjectMapper objectMapper;
 
@@ -31,6 +34,9 @@ public class AuthService {
 
     /** 内存活跃 Token 字典: Token -> 过期时间戳（毫秒） */
     private final Map<String, Long> activeTokens = new ConcurrentHashMap<>();
+
+    /** 内存 Token 对应角色字典: Token -> 角色 (ADMIN / VIEWER) */
+    private final Map<String, String> tokenRoles = new ConcurrentHashMap<>();
 
     /** 默认 Token 有效期：7 天 */
     private static final long TOKEN_TTL_MS = 7L * 24 * 3600 * 1000;
@@ -48,14 +54,15 @@ public class AuthService {
         if (file.exists()) {
             try {
                 this.authConfig = objectMapper.readValue(file, AuthConfig.class);
-                log.info("[Auth] 已成功加载安全配置，管理员账号: {}", authConfig.getAdminUsername());
+                log.info("[Auth] 已成功加载安全配置，管理员账号: {}, 只读账号: {}",
+                        authConfig.getAdminUsername(), authConfig.getViewerUsername());
             } catch (Exception e) {
                 log.error("[Auth] 读取 auth-config.json 异常: {}", e.getMessage());
             }
         } else {
             // 首次启动，生成默认配置并持久化
             saveConfig();
-            log.info("[Auth] 初始化默认安全配置成功 (默认账号: admin / 初始密码: admin123)");
+            log.info("[Auth] 初始化默认安全配置成功 (默认管理员: admin / admin123, 只读观察者: viewer / viewer123)");
         }
     }
 
@@ -81,9 +88,10 @@ public class AuthService {
      */
     public String login(String username, String password) {
         if (!authConfig.isEnabled()) {
-            // 若鉴权关闭，直接签发通用 Token
+            // 若鉴权关闭，直接签发通用 Token，具备管理员权限
             String token = generateToken();
             activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
+            tokenRoles.put(token, ROLE_ADMIN);
             return token;
         }
 
@@ -91,29 +99,54 @@ public class AuthService {
             return null;
         }
 
-        if (!authConfig.getAdminUsername().trim().equalsIgnoreCase(username.trim())) {
-            return null;
+        String trimmedUser = username.trim();
+
+        // 1. 验证超级管理员账号
+        if (authConfig.getAdminUsername() != null && authConfig.getAdminUsername().trim().equalsIgnoreCase(trimmedUser)) {
+            String storedHash = authConfig.getAdminPasswordHash();
+            if (matchPassword(password, storedHash)) {
+                String token = generateToken();
+                activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
+                tokenRoles.put(token, ROLE_ADMIN);
+                log.info("[Auth] 管理员 [{}] 登录成功，分配 ADMIN 权限", trimmedUser);
+                return token;
+            }
         }
 
-        String storedHash = authConfig.getAdminPasswordHash();
-        boolean matched = false;
-
-        // 兼容直接明文匹配（例如初始的 admin123）以及 SHA-256 散列匹配
-        if (password.equals(storedHash)) {
-            matched = true;
-        } else if (sha256(password).equalsIgnoreCase(storedHash)) {
-            matched = true;
+        // 2. 验证只读观察员账号
+        if (authConfig.isViewerEnabled() && authConfig.getViewerUsername() != null
+                && authConfig.getViewerUsername().trim().equalsIgnoreCase(trimmedUser)) {
+            String storedHash = authConfig.getViewerPasswordHash();
+            if (matchPassword(password, storedHash)) {
+                String token = generateToken();
+                activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
+                tokenRoles.put(token, ROLE_VIEWER);
+                log.info("[Auth] 只读观察员 [{}] 登录成功，分配 VIEWER 只读权限", trimmedUser);
+                return token;
+            }
         }
 
-        if (matched) {
-            String token = generateToken();
-            activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
-            log.info("[Auth] 用户 [{}] 登录成功，已分配 Token", username);
-            return token;
-        }
-
-        log.warn("[Auth] 用户 [{}] 登录失败，密码不匹配", username);
+        log.warn("[Auth] 用户 [{}] 登录失败，账号或密码不匹配", trimmedUser);
         return null;
+    }
+
+    private boolean matchPassword(String rawPassword, String storedHash) {
+        if (rawPassword == null || storedHash == null) return false;
+        if (rawPassword.equals(storedHash)) {
+            return true;
+        }
+        return sha256(rawPassword).equalsIgnoreCase(storedHash);
+    }
+
+    /**
+     * 获取 Token 对应的用户角色 (ADMIN / VIEWER)
+     */
+    public String getRole(String token) {
+        if (!authConfig.isEnabled()) {
+            return ROLE_ADMIN;
+        }
+        if (token == null) return null;
+        return tokenRoles.getOrDefault(token.trim(), ROLE_ADMIN);
     }
 
     /**
@@ -132,6 +165,7 @@ public class AuthService {
         }
         if (System.currentTimeMillis() > expireTime) {
             activeTokens.remove(token.trim());
+            tokenRoles.remove(token.trim());
             return false;
         }
         // 自动续期
@@ -145,28 +179,39 @@ public class AuthService {
     public void logout(String token) {
         if (token != null) {
             activeTokens.remove(token.trim());
+            tokenRoles.remove(token.trim());
         }
     }
 
     /**
-     * 修改管理员密码
+     * 修改管理员或只读账号密码
      */
     public synchronized boolean changePassword(String username, String oldPassword, String newPassword) {
         if (newPassword == null || newPassword.trim().length() < 5) {
             throw new IllegalArgumentException("新密码长度不能少于 5 位");
         }
-        // 验证旧密码
-        String token = login(username, oldPassword);
+        if (username == null) return false;
+        String trimmedUser = username.trim();
+        String token = login(trimmedUser, oldPassword);
         if (token == null) {
             return false;
         }
-        // 更新为 SHA-256 密文
-        authConfig.setAdminPasswordHash(sha256(newPassword.trim()));
-        saveConfig();
-        // 清理所有旧登录 Token，强制重新登录
-        activeTokens.clear();
-        log.info("[Auth] 管理员 [{}] 密码已修改，所有在线会话已失效", username);
-        return true;
+        if (trimmedUser.equalsIgnoreCase(authConfig.getAdminUsername())) {
+            authConfig.setAdminPasswordHash(sha256(newPassword.trim()));
+            saveConfig();
+            activeTokens.clear();
+            tokenRoles.clear();
+            log.info("[Auth] 管理员 [{}] 密码已修改，所有在线会话已失效", trimmedUser);
+            return true;
+        } else if (authConfig.isViewerEnabled() && trimmedUser.equalsIgnoreCase(authConfig.getViewerUsername())) {
+            authConfig.setViewerPasswordHash(sha256(newPassword.trim()));
+            saveConfig();
+            activeTokens.clear();
+            tokenRoles.clear();
+            log.info("[Auth] 只读账号 [{}] 密码已修改，所有在线会话已失效", trimmedUser);
+            return true;
+        }
+        return false;
     }
 
     private String generateToken() {
@@ -195,7 +240,6 @@ public class AuthService {
         File f2 = new File("monitor-server/data/auth-config.json");
         if (f2.exists()) return f2;
 
-        // 如果都不存在，判断当前是否在 monitor-server 目录下
         if (new File("src").exists()) {
             return f1;
         } else {

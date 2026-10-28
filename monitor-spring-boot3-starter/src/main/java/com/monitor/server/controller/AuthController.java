@@ -78,12 +78,18 @@ public class AuthController {
         cookie.setHttpOnly(false); // 允许前端 JS 读取
         response.addCookie(cookie);
 
+        String role = authService.getRole(token);
+        String actualUsername = AuthService.ROLE_VIEWER.equalsIgnoreCase(role)
+                ? authService.getAuthConfig().getViewerUsername()
+                : (username != null ? username : authService.getAuthConfig().getAdminUsername());
+
         return Map.of(
                 "code", 200,
                 "message", "登录成功",
                 "data", Map.of(
                         "token", token,
-                        "username", username != null ? username : "admin"
+                        "username", actualUsername,
+                        "role", role != null ? role : AuthService.ROLE_ADMIN
                 )
         );
     }
@@ -128,11 +134,16 @@ public class AuthController {
         String token = extractToken(request);
         boolean valid = authService.validateToken(token);
         if (valid) {
+            String role = authService.getRole(token);
+            String username = AuthService.ROLE_VIEWER.equalsIgnoreCase(role)
+                    ? authService.getAuthConfig().getViewerUsername()
+                    : authService.getAuthConfig().getAdminUsername();
             return Map.of(
                     "code", 200,
                     "data", Map.of(
                             "authenticated", true,
-                            "username", authService.getAuthConfig().getAdminUsername()
+                            "username", username,
+                            "role", role != null ? role : AuthService.ROLE_ADMIN
                     )
             );
         } else {
