@@ -151,7 +151,8 @@ public class SystemMetricsReporter {
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(json.getBytes(StandardCharsets.UTF_8));
             }
-            conn.getResponseCode();
+            int code = conn.getResponseCode();
+            if (code >= 400) System.err.println("[SystemMetricsReporter] 指标上报响应异常 (" + code + "): " + url);
             conn.disconnect();
         } catch (Exception e) {
             // 静默

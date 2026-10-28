@@ -43,7 +43,7 @@ public class HeartbeatManager {
     private static void httpPut(String url, String body, String token) {
         try {
             HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
-            conn.setRequestMethod("PUT");
+            conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setConnectTimeout(3000);
             conn.setReadTimeout(3000);
@@ -55,7 +55,8 @@ public class HeartbeatManager {
             try (OutputStream os = conn.getOutputStream()) {
                 os.write(body.getBytes("UTF-8"));
             }
-            conn.getResponseCode();
+            int code = conn.getResponseCode();
+            if (code >= 400) System.err.println("[HeartbeatManager] 心跳上报响应异常 (" + code + "): " + url);
             conn.disconnect();
         } catch (Exception e) {
             // 心跳失败静默，不干扰应用运行

@@ -79,6 +79,7 @@ public class SystemMetricController {
             metric.setDiskDetails(diskJson);
             metric.setCreatedAt(LocalDateTime.now());
             LATEST_HOST_METRICS.put(appName + "::" + hostName, metric);
+
             LATEST_HOST_METRICS.put(appName + "::" + hostName, metric);
 
             // 纯 ES 模式下完全不写本地 MySQL，防止物理磁盘空间暴增
@@ -86,13 +87,27 @@ public class SystemMetricController {
                 metricRepo.insert(metric);
             }
 
-            // 收到主机指标上报，自动保活该机器的在线应用实例，彻底消除“指标在上报却误报离线”的假离线 Bug
+            // 收到主机指标上报，自动保活该机器的在线应用实例；若该节点尚未在表中（如服务端刚刚重启），自动补全注册！
             try {
-                appRepo.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ApmApplication>()
+                int updated = appRepo.update(null, new com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ApmApplication>()
                         .set(ApmApplication::getLastHeartbeat, LocalDateTime.now())
                         .set(ApmApplication::getStatus, "online")
+                        .set(ApmApplication::getIpAddress, ipAddress)
                         .eq(ApmApplication::getAppName, appName)
                         .eq(ApmApplication::getHostName, hostName));
+                if (updated == 0) {
+                    ApmApplication newApp = new ApmApplication();
+                    newApp.setAppName(appName);
+                    newApp.setHostName(hostName);
+                    newApp.setIpAddress(ipAddress);
+                    newApp.setInstanceId(appName + "@" + hostName);
+                    newApp.setStatus("online");
+                    newApp.setLastHeartbeat(LocalDateTime.now());
+                    newApp.setFirstSeen(LocalDateTime.now());
+                    newApp.setAgentVersion("1.0.0");
+                    appRepo.insert(newApp);
+                    log.info("[SystemMetrics] 接收到指标时自动补全注册在线应用节点: {} @ {}", appName, hostName);
+                }
             } catch (Exception ignored) {}
 
             // 2. 处理探针巡检结果列表
