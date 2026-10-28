@@ -27,7 +27,7 @@ public class AgentController {
     /**
      * Agent 注册 —— 应用初次接入时调用
      */
-    @PostMapping("/register")
+    @RequestMapping(value = "/register", method = {RequestMethod.POST, RequestMethod.PUT})
     public Map<String,Object> register(@RequestBody ApmApplication app) {
         app.setFirstSeen(LocalDateTime.now());
         app.setLastHeartbeat(LocalDateTime.now());
@@ -63,7 +63,7 @@ public class AgentController {
     /**
      * Agent 心跳 —— 定时更新在线状态
      */
-    @PutMapping("/heartbeat")
+    @RequestMapping(value = "/heartbeat", method = {RequestMethod.PUT, RequestMethod.POST, RequestMethod.GET})
     public Map<String,Object> heartbeat(@RequestBody Map<String,String> body) {
         String instanceId = body.get("instanceId");
         if (instanceId == null || instanceId.isEmpty()) {
