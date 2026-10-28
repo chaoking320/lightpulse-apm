@@ -39,10 +39,13 @@ public class SystemMetricController {
     private final com.monitor.server.repository.ApmHostConfigRepo hostConfigRepo;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
+    /** 实时全内存极速缓存：存储各主机最新一条指标 [appName::hostName -> metric]，零延迟零IO保底 */
+    public static final Map<String, ApmSystemMetric> LATEST_HOST_METRICS = new java.util.concurrent.ConcurrentHashMap<>();
+
     /**
-     * 接收 Agent 周期性上报的主机系统指标与巡检结果
+     * 接收 Agent 周期性上报的主机系统指标与巡检结果 (支持 POST 与 PUT 兼容各版本探针)
      */
-    @PostMapping("/system-metrics")
+    @RequestMapping(value = "/system-metrics", method = {RequestMethod.POST, RequestMethod.PUT})
     public Map<String, Object> receiveSystemMetrics(@RequestBody Map<String, Object> payload) {
         try {
             String appName = str(payload.get("appName"), "unknown");
@@ -75,6 +78,8 @@ public class SystemMetricController {
             }
             metric.setDiskDetails(diskJson);
             metric.setCreatedAt(LocalDateTime.now());
+            LATEST_HOST_METRICS.put(appName + "::" + hostName, metric);
+            LATEST_HOST_METRICS.put(appName + "::" + hostName, metric);
 
             // 纯 ES 模式下完全不写本地 MySQL，防止物理磁盘空间暴增
             if (!storageEngineService.isPureEs()) {
