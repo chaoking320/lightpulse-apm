@@ -49,7 +49,15 @@ public class Registration {
         json.append("}");
 
         String url = config.getServerUrl() + "/api/v1/agent/register";
-        httpPost(url, json.toString(), config.getServerToken());
+        int code = httpPost(url, json.toString(), config.getServerToken());
+        if (code == 404 && !config.getServerUrl().endsWith("/apm")) {
+            String fallbackUrl = config.getServerUrl() + "/apm/api/v1/agent/register";
+            int fbCode = httpPost(fallbackUrl, json.toString(), config.getServerToken());
+            if (fbCode >= 200 && fbCode < 300) {
+                config.setServerUrl(config.getServerUrl() + "/apm");
+                System.out.println("[Monitor Agent] 自动探测并适配服务端 /apm 上下文路径 ✓ (" + config.getServerUrl() + ")");
+            }
+        }
 
         System.out.println("[Monitor Agent] 注册成功: " + config.getAppName() + " " + instanceId);
     }
@@ -77,7 +85,7 @@ public class Registration {
         return json.toString();
     }
 
-    private static void httpPost(String url, String body, String token) {
+    private static int httpPost(String url, String body, String token) {
         try {
             HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
             conn.setRequestMethod("POST");
@@ -94,8 +102,10 @@ public class Registration {
             }
             int code = conn.getResponseCode();
             conn.disconnect();
+            return code;
         } catch (Exception e) {
             System.err.println("[Monitor Agent] 注册异常: " + e.getClass().getSimpleName() + " - " + e.getMessage());
+            return -1;
         }
     }
 
