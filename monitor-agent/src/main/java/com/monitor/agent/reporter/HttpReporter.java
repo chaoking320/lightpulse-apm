@@ -26,7 +26,7 @@ public class HttpReporter {
                     java.util.List<Object> batch = ReportQueue.drain(BATCH_SIZE);
                     if (!batch.isEmpty()) {
                         String body = JsonSerializer.serializeMetrics(batch);
-                        httpPost(metricsUrl, body);
+                        httpPost(metricsUrl, body, config);
                     }
                     Thread.sleep(config.getReportIntervalMs());
                 } catch (InterruptedException e) {
@@ -41,7 +41,7 @@ public class HttpReporter {
         reporterThread.start();
     }
 
-    private static void httpPost(String url, String body) {
+    private static void httpPost(String url, String body, AgentConfig config) {
         try {
             HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
             conn.setRequestMethod("POST");

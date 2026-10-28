@@ -15,7 +15,7 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/setup")
+@RequestMapping({"/api/setup", "/api/v1/setup", "/apm/api/v1/setup", "/apm/api/setup"})
 @RequiredArgsConstructor
 public class SetupWizardController {
 

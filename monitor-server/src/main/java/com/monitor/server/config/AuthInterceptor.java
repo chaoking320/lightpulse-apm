@@ -31,10 +31,10 @@ public class AuthInterceptor implements HandlerInterceptor {
         }
 
         // 2. Agent 专用通道：校验 X-Agent-Token
-        if (uri.startsWith("/api/v1/agent/")) {
+        if (uri.startsWith("/api/v1/agent/") || uri.startsWith("/apm/api/v1/agent/")) {
             String configuredToken = authService.getAuthConfig().getAgentSecretToken();
             if (configuredToken == null || configuredToken.isBlank()) {
-                return true; // 若未配置秘钥则兼容放行
+                return true; // 若未配置秘钥则直通放行，Agent 无需配置任何 Token
             }
             String agentToken = request.getHeader("X-Agent-Token");
             if (agentToken == null || agentToken.isBlank()) {
@@ -62,14 +62,14 @@ public class AuthInterceptor implements HandlerInterceptor {
         }
 
         // 4. Token 无效或未登录拦截
-        if (uri.startsWith("/api/")) {
+        if (uri.contains("/api/")) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json;charset=UTF-8");
             response.getWriter().write("{\"code\":401,\"message\":\"接口拒绝访问：未提供有效 Token 或登录凭据已过期\"}");
             return false;
         } else {
             // 浏览器页面访问重定向至登录页
-            String redirectUrl = request.getContextPath() + "/login.html";
+            String redirectUrl = request.getContextPath() + (uri.startsWith("/apm") ? "/apm/login.html" : "/login.html");
             response.sendRedirect(redirectUrl);
             return false;
         }
@@ -77,15 +77,18 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private boolean isPublicResource(String uri) {
         if (uri == null) return false;
-        return uri.equals("/login.html")
-                || uri.startsWith("/api/auth/login")
-                || uri.startsWith("/api/auth/captcha")
-                || uri.startsWith("/api/auth/status")
-                || uri.equals("/api/setup/status")
-                || uri.equals("/api/setup/health")
-                || uri.equals("/api/health")
-                || uri.equals("/favicon.ico")
-                || uri.startsWith("/assets/")
-                || uri.equals("/error");
+        return uri.endsWith("/login.html")
+                || uri.contains("/api/auth/login")
+                || uri.contains("/api/v1/auth/login")
+                || uri.contains("/api/auth/captcha")
+                || uri.contains("/api/v1/auth/captcha")
+                || uri.contains("/api/auth/status")
+                || uri.contains("/api/v1/auth/status")
+                || uri.contains("/api/setup/status")
+                || uri.contains("/api/setup/health")
+                || uri.contains("/api/health")
+                || uri.endsWith("/favicon.ico")
+                || uri.contains("/assets/")
+                || uri.endsWith("/error");
     }
 }

@@ -14,7 +14,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/agent")
+@RequestMapping({"/api/v1/agent", "/apm/api/v1/agent"})
 @RequiredArgsConstructor
 public class AgentController {
 

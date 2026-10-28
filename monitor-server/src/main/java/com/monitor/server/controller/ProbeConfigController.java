@@ -26,7 +26,7 @@ import java.util.*;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1")
+@RequestMapping({"/api/v1", "/apm/api/v1"})
 @RequiredArgsConstructor
 public class ProbeConfigController {
 

@@ -13,7 +13,7 @@ import java.util.Map;
  * 采集策略管理 API —— 用户自定义 Agent 拦截目标和方式
  */
 @RestController
-@RequestMapping("/api/v1/capture-configs")
+@RequestMapping({"/api/v1/capture-configs", "/apm/api/v1/capture-configs"})
 @RequiredArgsConstructor
 public class CaptureConfigController {
 

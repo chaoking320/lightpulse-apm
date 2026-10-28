@@ -15,7 +15,7 @@ import java.util.*;
  * 自定义监控规则 + 告警管理 API
  */
 @RestController
-@RequestMapping("/api/v1")
+@RequestMapping({"/api/v1", "/apm/api/v1"})
 @RequiredArgsConstructor
 public class MonitorRuleController {
 
