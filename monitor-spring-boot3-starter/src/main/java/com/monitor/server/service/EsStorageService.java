@@ -344,7 +344,7 @@ public class EsStorageService {
                 """;
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(5))
                     .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
@@ -369,7 +369,7 @@ public class EsStorageService {
                     }
                     """;
                 HttpRequest.Builder fallbackReq = HttpRequest.newBuilder()
-                        .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                        .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                         .header("Content-Type", "application/json")
                         .timeout(Duration.ofSeconds(5))
                         .POST(HttpRequest.BodyPublishers.ofString(fallbackQuery, StandardCharsets.UTF_8));
@@ -502,7 +502,7 @@ public class EsStorageService {
                 """, safeMinutes, hostName, hostName, hostName);
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(6))
                     .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
@@ -570,7 +570,7 @@ public class EsStorageService {
                 """, from, size, String.join(",", mustClauses));
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(6))
                     .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
@@ -741,7 +741,7 @@ public class EsStorageService {
                 """, from, safeSize, String.join(",", mustClauses));
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(6))
                     .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
@@ -837,7 +837,7 @@ public class EsStorageService {
                 """, String.join(",", mustClauses), safeInterval);
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(5))
                     .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
@@ -916,7 +916,7 @@ public class EsStorageService {
                 """, (safeRange * 2 + 1), appName, hostName, logPath, minLine, maxLine);
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                    .uri(URI.create(cleanUrl + "/" + alias + "/_search"))
+                    .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(5))
                     .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
