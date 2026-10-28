@@ -25,7 +25,7 @@ import java.util.regex.Pattern;
 @Service
 public class VictoriaMetricsService {
 
-    @Value("${monitor.victoriametrics.enabled:true}")
+    @Value("${monitor.victoriametrics.enabled:false}")
     private boolean enabled;
 
     @Value("${monitor.victoriametrics.url:http://127.0.0.1:8428}")
@@ -98,7 +98,7 @@ public class VictoriaMetricsService {
                     sendToVictoriaMetrics(lineProtocol.toString());
                 }
             } catch (Exception e) {
-                log.debug("向 VictoriaMetrics 写入指标失败 (可忽略，若未启动VM): {}", e.getMessage());
+                // 静默忽略
             }
         });
     }

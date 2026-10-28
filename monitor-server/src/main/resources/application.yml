@@ -19,12 +19,12 @@ mybatis-plus:
     banner: false
 logging:
   level:
-    com.monitor: DEBUG
+    com.monitor: INFO
 
 # LightPulse 监控系统配置
 monitor:
   victoriametrics:
-    enabled: true
+    enabled: false
     url: http://127.0.0.1:8428
   alert:
     # 企微 / 钉钉 / 飞书 机器人 Webhook 地址（留空则只记录告警到日志与数据库）
