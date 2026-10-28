@@ -38,6 +38,13 @@ public class StorageEngineService {
     @PostConstruct
     public void init() {
         loadConfig();
+        if (isEsActive()) {
+            try {
+                esStorageService.initIndices(currentConfig);
+            } catch (Exception e) {
+                log.warn("[Storage Engine] 服务启动自动初始化 ES 模板与索引异常: {}", e.getMessage());
+            }
+        }
     }
 
     /**
