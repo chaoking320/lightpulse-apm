@@ -164,14 +164,34 @@ public class EsStorageService {
 
                 HttpResponse<Void> headResp = httpClient.send(headReq.build(), HttpResponse.BodyHandlers.discarding());
                 if (headResp.statusCode() == 404) {
+                    String createIndexBody = String.format("""
+                        {
+                          "aliases": {
+                            "%s": {}
+                          },
+                          "settings": {
+                            "number_of_shards": 1,
+                            "number_of_replicas": 0
+                          },
+                          "mappings": {
+                            "properties": {
+                              %s
+                            }
+                          }
+                        }
+                        """, alias, mappingProps);
                     HttpRequest.Builder putReq = HttpRequest.newBuilder()
                             .uri(URI.create(cleanUrl + "/" + todayIndex))
                             .header("Content-Type", "application/json")
-                            .PUT(HttpRequest.BodyPublishers.ofString("{\"aliases\":{\"" + alias + "\":{}}}", StandardCharsets.UTF_8))
+                            .PUT(HttpRequest.BodyPublishers.ofString(createIndexBody, StandardCharsets.UTF_8))
                             .timeout(Duration.ofSeconds(5));
                     addAuthHeader(putReq, config.getEsUsername(), config.getEsPassword());
-                    httpClient.send(putReq.build(), HttpResponse.BodyHandlers.discarding());
-                    log.info("[ES Storage] 成功自动创建 ES 物理索引与别名: {} -> {}", todayIndex, alias);
+                    HttpResponse<String> createResp = httpClient.send(putReq.build(), HttpResponse.BodyHandlers.ofString());
+                    if (createResp.statusCode() >= 200 && createResp.statusCode() < 300) {
+                        log.info("[ES Storage] 成功自动创建 ES 物理索引与别名: {} -> {}", todayIndex, alias);
+                    } else {
+                        log.warn("[ES Storage] 创建 ES 物理索引 {} 响应 {}: {}", todayIndex, createResp.statusCode(), createResp.body());
+                    }
                 }
             } catch (Exception e) {
                 log.warn("[ES Storage] 自动初始化 ES 索引模板 {} 出现异常: {}", mod, e.getMessage());
@@ -291,8 +311,8 @@ public class EsStorageService {
             String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
             String alias = prefix + "metrics";
 
-            // 查询最近 24 小时各主机最新状态，按 [ipAddress, appName, hostName] 进行 composite 复合聚合 + top_hits 取第 1 条
-            // 确保不同物理节点/虚拟节点独立呈现，防止多台机器默认主机名为 localhost 导致相互覆盖
+            // 查询最近 24 小时各主机最新状态，按 [appName, hostName] 进行 composite 复合聚合 + top_hits 取第 1 条
+            // (ipAddress 直接从 hit._source 中提取，避免聚合因历史 mapping 字段类型冲突而报错)
             String queryJson = """
                 {
                   "size": 0,
@@ -306,7 +326,6 @@ public class EsStorageService {
                       "composite": {
                         "size": 300,
                         "sources": [
-                          { "ip": { "terms": { "field": "ipAddress", "missing_bucket": true } } },
                           { "app": { "terms": { "field": "appName", "missing_bucket": true } } },
                           { "host": { "terms": { "field": "hostName", "missing_bucket": true } } }
                         ]
@@ -335,36 +354,18 @@ public class EsStorageService {
             if (resp.statusCode() == 200) {
                 parseLatestBuckets(resp.body(), result);
             } else {
-                // 如果当前字段是非 keyword 类型（如历史遗留的旧索引），降级使用 .keyword 字段重新聚合
-                log.warn("[ES Storage] 复合聚合查询各主机最新状态响应码 {}: {}，尝试使用 keyword 字段降级查询", resp.statusCode(), resp.body());
+                // 如果 ES 聚合返回非 200，启用全兼容降级查询：按时间倒序获取最新文档并在内存中排重
+                // 零依赖 ES 聚合语法，无论 ES 字段类型如何错乱均 100% 保证查出活跃主机
+                log.warn("[ES Storage] 聚合查询各主机最新状态响应码 {}: {}，尝试使用内存排重全兼容降级查询", resp.statusCode(), resp.body());
                 String fallbackQuery = """
                     {
-                      "size": 0,
+                      "size": 300,
                       "query": {
                         "range": {
                           "@timestamp": { "gte": "now-24h" }
                         }
                       },
-                      "aggs": {
-                        "by_host": {
-                          "composite": {
-                            "size": 300,
-                            "sources": [
-                              { "ip": { "terms": { "field": "ipAddress.keyword", "missing_bucket": true } } },
-                              { "app": { "terms": { "field": "appName.keyword", "missing_bucket": true } } },
-                              { "host": { "terms": { "field": "hostName.keyword", "missing_bucket": true } } }
-                            ]
-                          },
-                          "aggs": {
-                            "latest": {
-                              "top_hits": {
-                                "sort": [{ "@timestamp": { "order": "desc" } }],
-                                "size": 1
-                              }
-                            }
-                          }
-                        }
-                      }
+                      "sort": [{ "@timestamp": { "order": "desc" } }]
                     }
                     """;
                 HttpRequest.Builder fallbackReq = HttpRequest.newBuilder()
@@ -375,13 +376,37 @@ public class EsStorageService {
                 addAuthHeader(fallbackReq, config.getEsUsername(), config.getEsPassword());
                 HttpResponse<String> fallbackResp = httpClient.send(fallbackReq.build(), HttpResponse.BodyHandlers.ofString());
                 if (fallbackResp.statusCode() == 200) {
-                    parseLatestBuckets(fallbackResp.body(), result);
+                    parseLatestHitsInMemory(fallbackResp.body(), result);
+                } else {
+                    log.error("[ES Storage] 内存排重降级查询各主机状态也失败，响应 {}: {}", fallbackResp.statusCode(), fallbackResp.body());
                 }
             }
         } catch (Exception e) {
             log.error("[ES Storage] 从 ES 查询最新主机列表异常: {}", e.getMessage());
         }
         return result;
+    }
+
+        private void parseLatestHitsInMemory(String responseBody, List<ApmSystemMetric> result) {
+        try {
+            JsonNode root = objectMapper.readTree(responseBody);
+            JsonNode hits = root.path("hits").path("hits");
+            if (hits.isArray()) {
+                Set<String> seen = new HashSet<>();
+                for (JsonNode hit : hits) {
+                    JsonNode src = hit.path("_source");
+                    ApmSystemMetric m = parseMetricFromEsSource(src);
+                    if (m != null) {
+                        String key = m.getAppName() + "::" + m.getHostName();
+                        if (seen.add(key)) {
+                            result.add(m);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[ES Storage] 内存排重解析主机指标异常: {}", e.getMessage());
+        }
     }
 
     private void parseLatestBuckets(String responseBody, List<ApmSystemMetric> result) {

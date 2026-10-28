@@ -132,10 +132,14 @@ const MATCH_TYPE_LABEL = {annotation:'注解', class_name:'类名', package_name
 const api = (path, opts) => {
   const token = localStorage.getItem('LP_TOKEN') || '';
   const customHeaders = (opts && opts.headers) || {};
-  const headers = Object.assign({
+  const defaultHeaders = {
     'Authorization': token ? ('Bearer ' + token) : '',
     'X-Token': token
-  }, customHeaders);
+  };
+  if (opts && opts.body && typeof opts.body === 'string') {
+    defaultHeaders['Content-Type'] = 'application/json';
+  }
+  const headers = Object.assign(defaultHeaders, customHeaders);
 
   return fetch(BASE + path, Object.assign({}, opts || {}, { headers }))
     .then(r => {
@@ -1980,7 +1984,7 @@ function LogsTab() {
     const url = isEdit ? `/api/v1/log-configs/${editingConfigId}` : '/api/v1/log-configs';
     const method = isEdit ? 'PUT' : 'POST';
 
-    api(url, { method, body: JSON.stringify(configForm) }).then(() => {
+    api(url, { method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(configForm) }).then(() => {
       setShowConfigModal(false);
       loadConfigs();
     });
