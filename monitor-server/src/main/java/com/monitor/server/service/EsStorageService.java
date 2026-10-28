@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -636,7 +637,7 @@ public class EsStorageService {
                 for (ApmLogRecord r : logs) {
                     Map<String, Object> doc = new LinkedHashMap<>();
                     LocalDateTime ts = r.getCreatedAt() != null ? r.getCreatedAt() : LocalDateTime.now();
-                    doc.put("@timestamp", ts.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+                    doc.put("@timestamp", ts.atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
                     doc.put("appName", r.getAppName());
                     doc.put("hostName", r.getHostName());
                     doc.put("ipAddress", r.getIpAddress());
@@ -693,22 +694,28 @@ public class EsStorageService {
 
             List<String> mustClauses = new ArrayList<>();
             if (appName != null && !appName.isBlank() && !"*".equals(appName)) {
-                mustClauses.add("{\"term\":{\"appName\":\"" + appName.trim() + "\"}}");
+                String safe = appName.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"appName\":\"" + safe + "\"}},{\"term\":{\"appName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"appName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) {
-                mustClauses.add("{\"term\":{\"hostName\":\"" + hostName.trim() + "\"}}");
+                String safe = hostName.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"hostName\":\"" + safe + "\"}},{\"term\":{\"hostName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"hostName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (ipAddress != null && !ipAddress.isBlank()) {
-                mustClauses.add("{\"term\":{\"ipAddress\":\"" + ipAddress.trim() + "\"}}");
+                String safe = ipAddress.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"ipAddress\":\"" + safe + "\"}},{\"term\":{\"ipAddress.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (logPath != null && !logPath.isBlank()) {
-                mustClauses.add("{\"term\":{\"logPath\":\"" + logPath.trim() + "\"}}");
+                String safe = logPath.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logPath\":\"" + safe + "\"}},{\"term\":{\"logPath.keyword\":\"" + safe + "\"}},{\"wildcard\":{\"logPath.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"logPath\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (logLevel != null && !logLevel.isBlank() && !"ALL".equalsIgnoreCase(logLevel)) {
-                mustClauses.add("{\"term\":{\"logLevel\":\"" + logLevel.trim().toUpperCase() + "\"}}");
+                String safe = logLevel.trim().toUpperCase().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logLevel\":\"" + safe + "\"}},{\"term\":{\"logLevel.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (traceId != null && !traceId.isBlank()) {
-                mustClauses.add("{\"term\":{\"traceId\":\"" + traceId.trim() + "\"}}");
+                String safe = traceId.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"traceId\":\"" + safe + "\"}},{\"term\":{\"traceId.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (keyword != null && !keyword.isBlank()) {
                 String safeKw = keyword.replace("\"", "\\\"");
@@ -717,7 +724,7 @@ public class EsStorageService {
 
             // 时间范围
             String timeRangeStart = (startTime != null && !startTime.isBlank()) ? startTime : "now-1h";
-            String timeRangeEnd = (endTime != null && !endTime.isBlank()) ? endTime : "now";
+            String timeRangeEnd = (endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime)) ? endTime : "now+1d";
             mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
 
             int safePage = Math.max(1, page);
@@ -791,20 +798,23 @@ public class EsStorageService {
 
             List<String> mustClauses = new ArrayList<>();
             if (appName != null && !appName.isBlank() && !"*".equals(appName)) {
-                mustClauses.add("{\"term\":{\"appName\":\"" + appName.trim() + "\"}}");
+                String safe = appName.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"appName\":\"" + safe + "\"}},{\"term\":{\"appName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"appName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) {
-                mustClauses.add("{\"term\":{\"hostName\":\"" + hostName.trim() + "\"}}");
+                String safe = hostName.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"hostName\":\"" + safe + "\"}},{\"term\":{\"hostName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"hostName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (logPath != null && !logPath.isBlank()) {
-                mustClauses.add("{\"term\":{\"logPath\":\"" + logPath.trim() + "\"}}");
+                String safe = logPath.trim().replace("\"", "\\\"");
+                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logPath\":\"" + safe + "\"}},{\"term\":{\"logPath.keyword\":\"" + safe + "\"}},{\"wildcard\":{\"logPath.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"logPath\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
             }
             if (keyword != null && !keyword.isBlank()) {
                 String safeKw = keyword.replace("\"", "\\\"");
                 mustClauses.add("{\"match_phrase\":{\"content\":\"" + safeKw + "\"}}");
             }
             String timeRangeStart = (startTime != null && !startTime.isBlank()) ? startTime : "now-1h";
-            String timeRangeEnd = (endTime != null && !endTime.isBlank()) ? endTime : "now";
+            String timeRangeEnd = (endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime)) ? endTime : "now+1d";
             mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
 
             String safeInterval = (interval != null && !interval.isBlank()) ? interval : "1m";
