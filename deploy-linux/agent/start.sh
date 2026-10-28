@@ -5,9 +5,9 @@
 AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$AGENT_DIR"
 
-JAR_NAME=$(ls monitor-agent*.jar 2>/dev/null | grep -v sources | grep -v javadoc | head -n 1)
-if [ -z "$JAR_NAME" ]; then
-    JAR_NAME="monitor-agent-1.0.0.jar"
+JAR_NAME="monitor-agent-0.0.8.jar"
+if [ ! -f "$JAR_NAME" ]; then
+    JAR_NAME=$(ls monitor-agent*.jar 2>/dev/null | grep -v sources | grep -v javadoc | head -n 1)
 fi
 CONFIG_FILE="config.json"
 LOG_FILE="agent.log"
