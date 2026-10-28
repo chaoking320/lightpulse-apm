@@ -48,16 +48,13 @@ public class Registration {
         appendStr(json, "agentVersion", "1.0.0");
         json.append("}");
 
-        String url = config.getServerUrl() + "/api/v1/agent/register";
-        int code = httpPost(url, json.toString(), config.getServerToken());
-        if (code == 404 && !config.getServerUrl().endsWith("/apm")) {
-            String fallbackUrl = config.getServerUrl() + "/apm/api/v1/agent/register";
-            int fbCode = httpPost(fallbackUrl, json.toString(), config.getServerToken());
-            if (fbCode >= 200 && fbCode < 300) {
-                config.setServerUrl(config.getServerUrl() + "/apm");
-                System.out.println("[Monitor Agent] 自动探测并适配服务端 /apm 上下文路径 ✓ (" + config.getServerUrl() + ")");
-            }
+        String baseUrl = config.getServerUrl();
+        if (baseUrl.endsWith("/apm")) {
+            baseUrl = baseUrl.substring(0, baseUrl.length() - 4);
+            config.setServerUrl(baseUrl);
         }
+        String url = baseUrl + "/api/v1/agent/register";
+        httpPost(url, json.toString(), config.getServerToken());
 
         System.out.println("[Monitor Agent] 注册成功: " + config.getAppName() + " " + instanceId);
     }

@@ -227,10 +227,15 @@ public class ConfigFetcher {
     public static void fetchLogConfigs(AgentConfig config) {
         if (config == null) return;
         try {
+            String baseUrl = config.getServerUrl();
+            if (baseUrl.endsWith("/apm")) {
+                baseUrl = baseUrl.substring(0, baseUrl.length() - 4);
+                config.setServerUrl(baseUrl);
+            }
             String encodedApp = java.net.URLEncoder.encode(config.getAppName(), java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
             String host = config.getHostName();
             String encodedHost = java.net.URLEncoder.encode(host != null ? host : "*", java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
-            String url = config.getServerUrl() + "/api/v1/agent/log-configs?appName=" + encodedApp + "&hostName=" + encodedHost;
+            String url = baseUrl + "/api/v1/agent/log-configs?appName=" + encodedApp + "&hostName=" + encodedHost;
 
             HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
             conn.setConnectTimeout(5000);
@@ -238,21 +243,22 @@ public class ConfigFetcher {
             if (config.getServerToken() != null && !config.getServerToken().isBlank()) {
                 conn.setRequestProperty("X-Agent-Token", config.getServerToken());
             }
-            if (conn.getResponseCode() == 200) {
+            int code = conn.getResponseCode();
+            if (code == 200) {
                 String body = new String(readAll(conn.getInputStream()));
                 int newHash = body.hashCode();
                 if (newHash != lastLogConfigsHash) {
                     java.util.List<com.monitor.agent.log.LogConfig> list = AgentConfigLoader.parseLogConfigs(body);
                     com.monitor.agent.log.LogCollector.updateConfigs(list);
-                    if (!list.isEmpty()) {
-                        System.out.println("[ConfigFetcher] 从服务端热同步到 " + list.size() + " 个最新日志采集规则 ✓");
-                    }
+                    System.out.println("[ConfigFetcher] 从服务端热同步到 " + list.size() + " 个最新日志采集规则 ✓");
                     lastLogConfigsHash = newHash;
                 }
+            } else {
+                System.err.println("[ConfigFetcher] 拉取日志采集规则响应状态: HTTP " + code + " (URL: " + url + ")");
             }
             conn.disconnect();
-        } catch (Exception ignored) {
-            // 静默
+        } catch (Exception e) {
+            System.err.println("[ConfigFetcher] 拉取日志采集规则网络异常: " + e.getMessage());
         }
     }
 }
