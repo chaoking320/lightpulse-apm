@@ -214,15 +214,27 @@ public class LogCollector {
 
                 long curLen = file.length();
 
-                // 首次打开：从 EOF 游标开始读，绝不把历史存量老日志塞满网络！
+                // 首次打开挂载
                 if (raf == null) {
                     raf = new RandomAccessFile(file, "r");
                     if (lastFileOffset < 0) {
-                        lastFileOffset = curLen;
-                        raf.seek(curLen);
+                        // 全量同步模式(ALL)：首次挂载回溯读取最近存量日志（最多回溯 500KB，约 2000~5000 行），让存量日志即刻可见
+                        // 增量/错误告警模式：定位至文件末尾 EOF，仅采集后续新产生的日志
+                        long initOffset = "ALL".equalsIgnoreCase(config.getCollectMode())
+                                ? Math.max(0, curLen - 500000)
+                                : curLen;
+                        lastFileOffset = initOffset;
+                        raf.seek(initOffset);
                         lastFileLength = curLen;
-                        System.out.println("[LogCollector] 首次挂载文件 [" + file.getName() + "], 定位至文件末尾 EOF: " + curLen + " 字节");
-                        return;
+                        System.out.println("[LogCollector] 首次挂载文件 [" + file.getName() + "], 采集粒度=" + config.getCollectMode() + ", 定位游标=" + initOffset + " / 总长度=" + curLen);
+                        if (initOffset < curLen) {
+                            if (initOffset > 0) {
+                                raf.readLine(); // 跳过可能残缺的第一行半行
+                                lastFileOffset = raf.getFilePointer();
+                            }
+                        } else {
+                            return;
+                        }
                     } else {
                         raf.seek(Math.min(lastFileOffset, curLen));
                     }
