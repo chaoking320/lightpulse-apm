@@ -2,6 +2,7 @@ package com.monitor.agent;
 
 import com.monitor.agent.config.AgentConfig;
 import com.monitor.agent.config.ConfigFetcher;
+import com.monitor.agent.log.LogCollector;
 import com.monitor.agent.reporter.HttpReporter;
 import com.monitor.agent.transformer.MonitorTransformer;
 import net.bytebuddy.agent.builder.ResettableClassFileTransformer;
@@ -59,6 +60,14 @@ public class Agent {
         if (config.isEnableProbe() && !config.getProbes().isEmpty()) {
             com.monitor.agent.probe.ProbeScheduler.updateProbes(config.getProbes());
         }
+
+        // 8. 启动日志增量采集器
+        LogCollector.init(config);
+        try {
+            ConfigFetcher.fetchLogConfigs(config);
+        } catch (Exception ignored) {}
+
+        Runtime.getRuntime().addShutdownHook(new Thread(LogCollector::shutdown));
 
         System.out.println("[Monitor Agent] 启动完成 ✓ 应用=" + config.getAppName()
                 + " 上报地址=" + config.getServerUrl()

@@ -87,6 +87,11 @@ public class ConfigFetcher {
                     fetchProbes(config);
                 } catch (Exception ignored) {}
 
+                // 定时从服务端拉取最新的日志采集规则并热更新
+                try {
+                    fetchLogConfigs(config);
+                } catch (Exception ignored) {}
+
                 try {
                     Thread.sleep(config.getConfigPollIntervalMs());
                 } catch (InterruptedException e) {
@@ -206,6 +211,43 @@ public class ConfigFetcher {
                         System.out.println("[ConfigFetcher] 从服务端热同步到 " + serverProbes.size() + " 个最新接口探针规则 ✓");
                     }
                     lastProbesHash = newHash;
+                }
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+            // 静默
+        }
+    }
+
+    private static int lastLogConfigsHash = 0;
+
+    /**
+     * 从服务端拉取该主机匹配的最新日志采集规则并热更新 LogCollector
+     */
+    public static void fetchLogConfigs(AgentConfig config) {
+        if (config == null) return;
+        try {
+            String encodedApp = java.net.URLEncoder.encode(config.getAppName(), java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+            String host = config.getHostName();
+            String encodedHost = java.net.URLEncoder.encode(host != null ? host : "*", java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
+            String url = config.getServerUrl() + "/api/v1/agent/log-configs?appName=" + encodedApp + "&hostName=" + encodedHost;
+
+            HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            if (config.getServerToken() != null && !config.getServerToken().isBlank()) {
+                conn.setRequestProperty("X-Agent-Token", config.getServerToken());
+            }
+            if (conn.getResponseCode() == 200) {
+                String body = new String(readAll(conn.getInputStream()));
+                int newHash = body.hashCode();
+                if (newHash != lastLogConfigsHash) {
+                    java.util.List<com.monitor.agent.log.LogConfig> list = AgentConfigLoader.parseLogConfigs(body);
+                    com.monitor.agent.log.LogCollector.updateConfigs(list);
+                    if (!list.isEmpty()) {
+                        System.out.println("[ConfigFetcher] 从服务端热同步到 " + list.size() + " 个最新日志采集规则 ✓");
+                    }
+                    lastLogConfigsHash = newHash;
                 }
             }
             conn.disconnect();

@@ -7,15 +7,12 @@ import com.monitor.server.entity.ApmSystemMetric;
 import com.monitor.server.repository.ApmAlertRecordRepo;
 import com.monitor.server.repository.ApmProbeRecordRepo;
 import com.monitor.server.repository.ApmSystemMetricRepo;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import jakarta.annotation.PostConstruct;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -35,9 +32,7 @@ public class DataRetentionScheduler {
     private final ApmSystemMetricRepo systemMetricRepo;
     private final ApmProbeRecordRepo probeRecordRepo;
     private final ApmAlertRecordRepo alertRecordRepo;
-
-    @Autowired(required = false)
-    private StringRedisTemplate stringRedisTemplate;
+    private final com.monitor.server.repository.ApmLogRecordRepo logRecordRepo;
 
     @PostConstruct
     public void init() {
@@ -50,21 +45,10 @@ public class DataRetentionScheduler {
      */
     @Scheduled(cron = "0 30 3 * * ?")
     public void executeDailyCleanup() {
-        // 集群防并发锁：确保多节点部署时仅由 1 个节点执行数据淘汰
-        if (stringRedisTemplate != null) {
-            try {
-                Boolean locked = stringRedisTemplate.opsForValue().setIfAbsent("apm:lock:cleanup", "1", Duration.ofHours(2));
-                if (Boolean.FALSE.equals(locked)) {
-                    log.debug("[APM DataRetention] 其他集群节点正在执行或已执行数据淘汰，本次跳过");
-                    return;
-                }
-            } catch (Exception ignored) {}
-        }
-
         int retentionDays = siteSettingService.getDataRetentionDays();
         if (retentionDays <= 0) retentionDays = 30;
 
-        log.info("[APM DataRetention] 开始执行历史过期数据清理巡检，当前保留周期: {} 天", retentionDays);
+        log.info("[DataRetention] 开始执行历史过期数据清理巡检，当前保留周期: {} 天", retentionDays);
         LocalDateTime threshold = LocalDateTime.now().minusDays(retentionDays);
 
                 // 1. 若启用了 Elasticsearch 存储，按天滚动物理索引直接 DROP 清理（毫秒级无压力释放物理磁盘）
@@ -76,11 +60,16 @@ public class DataRetentionScheduler {
         try {
             int deletedMetrics = 0;
             int deletedProbes = 0;
+            int deletedLogs = 0;
             if (!storageEngineService.isPureEs()) {
                 deletedMetrics = systemMetricRepo.delete(
                         new LambdaQueryWrapper<ApmSystemMetric>().lt(ApmSystemMetric::getCreatedAt, threshold));
                 deletedProbes = probeRecordRepo.delete(
                         new LambdaQueryWrapper<ApmProbeRecord>().lt(ApmProbeRecord::getCreatedAt, threshold));
+                try {
+                    deletedLogs = logRecordRepo.delete(
+                            new LambdaQueryWrapper<com.monitor.server.entity.ApmLogRecord>().lt(com.monitor.server.entity.ApmLogRecord::getCreatedAt, threshold));
+                } catch (Exception ignored) {}
             }
             // 已确认且超过保留周期的历史告警
             int deletedAlerts = alertRecordRepo.delete(
@@ -88,10 +77,10 @@ public class DataRetentionScheduler {
                             .eq(ApmAlertRecord::getAcknowledged, true)
                             .lt(ApmAlertRecord::getTriggeredAt, threshold));
 
-            log.info("[APM DataRetention] 历史数据淘汰完成: 指标清理 {} 条, 探针记录清理 {} 条, 已处理告警清理 {} 条",
-                    deletedMetrics, deletedProbes, deletedAlerts);
+            log.info("[DataRetention] 历史数据淘汰完成: 指标清理 {} 条, 探针记录清理 {} 条, 日志清理 {} 条, 已处理告警清理 {} 条",
+                    deletedMetrics, deletedProbes, deletedLogs, deletedAlerts);
         } catch (Exception e) {
-            log.error("[APM DataRetention] 清理本地数据库历史数据异常: {}", e.getMessage());
+            log.error("[DataRetention] 清理本地数据库历史数据异常: {}", e.getMessage());
         }
     }
 }

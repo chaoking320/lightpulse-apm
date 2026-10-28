@@ -261,4 +261,81 @@ public class AgentConfigLoader {
         }
         return null;
     }
+
+    private static Long extractLong(String json, String... keys) {
+        if (json == null) return null;
+        for (String key : keys) {
+            if (key == null || key.isEmpty()) continue;
+            Pattern p = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*([0-9]+)");
+            Matcher m = p.matcher(json);
+            if (m.find()) {
+                try { return Long.parseLong(m.group(1)); } catch (Exception ignored) {}
+            }
+        }
+        return null;
+    }
+
+    public static List<com.monitor.agent.log.LogConfig> parseLogConfigs(String json) {
+        List<com.monitor.agent.log.LogConfig> list = new ArrayList<>();
+        if (json == null || json.isEmpty()) return list;
+
+        Pattern pattern = Pattern.compile("\"data\"\\s*:\\s*\\[");
+        Matcher m = pattern.matcher(json);
+        if (!m.find()) return list;
+
+        int start = m.end() - 1;
+        int depth = 0;
+        int arrayEnd = -1;
+        for (int i = start; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '[') depth++;
+            else if (c == ']') {
+                depth--;
+                if (depth == 0) {
+                    arrayEnd = i;
+                    break;
+                }
+            }
+        }
+        if (arrayEnd == -1) return list;
+
+        String arrayJson = json.substring(start + 1, arrayEnd);
+        List<String> objects = splitJsonObjects(arrayJson);
+        for (String oJson : objects) {
+            try {
+                com.monitor.agent.log.LogConfig cfg = new com.monitor.agent.log.LogConfig();
+                Long id = extractLong(oJson, "id");
+                if (id != null) cfg.setId(id);
+                cfg.setRuleName(extractStringWithDefault(oJson, "未命名规则", "ruleName"));
+                cfg.setAppName(extractStringWithDefault(oJson, "*", "appName"));
+                cfg.setHostName(extractStringWithDefault(oJson, "*", "hostName"));
+                cfg.setLogPath(extractString(oJson, "logPath"));
+                cfg.setCollectMode(extractStringWithDefault(oJson, "WARN_ERROR", "collectMode"));
+                cfg.setKeywordFilter(extractString(oJson, "keywordFilter"));
+                cfg.setExcludeKeyword(extractString(oJson, "excludeKeyword"));
+
+                Integer ctxLines = extractInt(oJson, "contextLines");
+                if (ctxLines != null) cfg.setContextLines(ctxLines);
+
+                Integer maxRate = extractInt(oJson, "maxRatePerSec");
+                if (maxRate != null) cfg.setMaxRatePerSec(maxRate);
+
+                Integer alertEn = extractInt(oJson, "alertEnabled");
+                if (alertEn != null) cfg.setAlertEnabled(alertEn);
+
+                Integer alertTh = extractInt(oJson, "alertThreshold");
+                if (alertTh != null) cfg.setAlertThreshold(alertTh);
+
+                Boolean en = extractBoolean(oJson, "enabled");
+                if (en != null) cfg.setEnabled(en);
+
+                if (cfg.getLogPath() != null && !cfg.getLogPath().isBlank()) {
+                    list.add(cfg);
+                }
+            } catch (Exception e) {
+                System.err.println("[AgentConfigLoader] 解析日志采集规则异常: " + e.getMessage());
+            }
+        }
+        return list;
+    }
 }
