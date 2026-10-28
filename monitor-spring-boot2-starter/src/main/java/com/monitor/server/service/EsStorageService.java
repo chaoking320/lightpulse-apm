@@ -1102,6 +1102,17 @@ public class EsStorageService {
         return m;
     }
 
+            private String buildContentQuery(String keyword) {
+        String safeKw = keyword.trim().replace("\"", "\\\"");
+        String safeKwLower = safeKw.toLowerCase();
+        return "{\"bool\":{\"should\":[" +
+                "{\"wildcard\":{\"content\":\"*" + safeKwLower + "*\"}}," +
+                "{\"wildcard\":{\"content\":\"*" + safeKw + "*\"}}," +
+                "{\"match_phrase\":{\"content\":\"" + safeKw + "\"}}," +
+                "{\"match\":{\"content\":{\"query\":\"" + safeKw + "\",\"operator\":\"and\"}}}" +
+                "],\"minimum_should_match\":1}}";
+    }
+
     private String normalizeEsDate(String dateStr, String defaultValue) {
         if (dateStr == null || dateStr.isBlank()) return defaultValue;
         String trimmed = dateStr.trim();
