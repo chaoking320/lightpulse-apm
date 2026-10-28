@@ -15,7 +15,7 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping({"/api/auth", "/api/v1/auth", "/apm/api/v1/auth", "/apm/api/auth"})
 @RequiredArgsConstructor
 public class AuthController {
 

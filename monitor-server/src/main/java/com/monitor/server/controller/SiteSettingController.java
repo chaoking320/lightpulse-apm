@@ -12,7 +12,7 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/settings")
+@RequestMapping({"/api/v1/settings", "/apm/api/v1/settings"})
 @RequiredArgsConstructor
 public class SiteSettingController {
 

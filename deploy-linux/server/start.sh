@@ -47,13 +47,13 @@ fi
 
 echo "🚀 使用 Java 环境: $($JAVA_CMD -version 2>&1 | head -n 1)"
 echo "🚀 正在启动 LightPulse 监控中心..."
-nohup "$JAVA_CMD" $JAVA_OPTS -jar "$JAR_NAME" --server.port=8086 --server.servlet.context-path=/apm > "$LOG_FILE" 2>&1 &
+nohup "$JAVA_CMD" $JAVA_OPTS -jar "$JAR_NAME" --server.port=8086 > "$LOG_FILE" 2>&1 &
 
 sleep 3
 PID=$(ps -ef | grep "$JAR_NAME" | grep -v grep | awk '{print $2}')
 if [ -n "$PID" ]; then
     echo "✅ 启动成功! PID: $PID"
-    echo "🌐 控制台地址: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8086/apm"
+    echo "🌐 控制台地址: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8086/index.html"
     echo "📄 查看实时日志: tail -f $LOG_FILE"
 else
     echo "❌ 启动失败，请检查日志:"

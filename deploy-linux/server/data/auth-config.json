@@ -2,5 +2,5 @@
   "enabled" : true,
   "adminUsername" : "admin",
   "adminPasswordHash" : "admin123",
-  "agentSecretToken" : "lp-agent-secret-token"
+  "agentSecretToken" : ""
 }

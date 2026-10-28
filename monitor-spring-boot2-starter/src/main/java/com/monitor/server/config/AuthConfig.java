@@ -24,7 +24,7 @@ public class AuthConfig {
     private String adminPasswordHash = "admin123";
 
     /**
-     * Agent 数据上报专用安全 Token（防止未授权网络恶意伪造指标）
+     * Agent 数据上报专用安全 Token（若配置则强制校验，留空则免密放行）
      */
-    private String agentSecretToken = "lp-agent-secret-token";
+    private String agentSecretToken = "";
 }

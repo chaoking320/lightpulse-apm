@@ -12,7 +12,7 @@ import java.util.*;
  * 监控看板 API
  */
 @RestController
-@RequestMapping("/api/v1")
+@RequestMapping({"/api/v1", "/apm/api/v1"})
 @RequiredArgsConstructor
 public class DashboardController {
 
