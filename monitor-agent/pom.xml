@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>io.github.chaoking320</groupId>
     <artifactId>monitor-agent</artifactId>
-    <version>0.0.7</version>
+    <version>0.0.8</version>
     <packaging>jar</packaging>
     <name>LightPulse APM Agent</name>
     <description>Lightweight zero-code JavaAgent and distributed host probe for LightPulse APM</description>

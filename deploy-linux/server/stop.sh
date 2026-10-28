@@ -2,7 +2,10 @@
 # ============================================================
 # LightPulse Server 停止脚本
 # ============================================================
-JAR_NAME="monitor-server-1.0.0-SNAPSHOT.jar"
+JAR_NAME=$(ls monitor-server*.jar 2>/dev/null | grep -v sources | grep -v javadoc | head -n 1)
+if [ -z "$JAR_NAME" ]; then
+    JAR_NAME="monitor-server"
+fi
 PID=$(ps -ef | grep "$JAR_NAME" | grep -v grep | awk '{print $2}')
 
 if [ -z "$PID" ]; then

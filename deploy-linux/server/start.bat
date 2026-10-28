@@ -10,6 +10,6 @@ cd /d "%~dp0"
 if not exist "data" mkdir data
 if not exist "logs" mkdir logs
 
-java -Xms256m -Xmx512m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai -Djava.awt.headless=true -jar monitor-server-1.0.0-SNAPSHOT.jar --server.port=8086 --server.servlet.context-path=/apm
+java -Xms256m -Xmx512m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai -Djava.awt.headless=true -jar monitor-server-0.0.8.jar --server.port=8086 --server.servlet.context-path=/apm
 
 pause
