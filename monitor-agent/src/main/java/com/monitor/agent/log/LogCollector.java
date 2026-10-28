@@ -135,7 +135,7 @@ public class LogCollector {
             this.config = config;
             int window = Math.max(5, Math.min(config.getContextLines(), 30));
             this.ringBuffer = new ArrayDeque<>(window);
-            this.file = new File(config.getLogPath());
+            this.file = resolveTargetFile(config.getLogPath());
         }
 
         public void updateConfig(LogConfig newConfig) {
@@ -156,21 +156,65 @@ public class LogCollector {
             }
         }
 
+        /**
+         * 解析真实目标日志文件（支持绝对路径、通配符通配如 jeecgboot-*.log，自动锁定最新活跃文件）
+         */
+        private File resolveTargetFile(String patternPath) {
+            if (patternPath == null || patternPath.isBlank()) return null;
+            if (!patternPath.contains("*") && !patternPath.contains("?")) {
+                return new File(patternPath);
+            }
+
+            try {
+                int lastSep = Math.max(patternPath.lastIndexOf('/'), patternPath.lastIndexOf('\\'));
+                String dirPath = (lastSep != -1) ? patternPath.substring(0, lastSep) : ".";
+                String filePattern = (lastSep != -1) ? patternPath.substring(lastSep + 1) : patternPath;
+
+                File dir = new File(dirPath);
+                if (!dir.exists() || !dir.isDirectory()) {
+                    return null;
+                }
+
+                String regex = filePattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
+                Pattern p = Pattern.compile("^" + regex + "$");
+
+                File[] matches = dir.listFiles((d, name) -> p.matcher(name).matches());
+                if (matches == null || matches.length == 0) {
+                    return null;
+                }
+
+                // 按文件最后修改时间倒序，获取当前正在写入的最新日志文件
+                Arrays.sort(matches, (f1, f2) -> Long.compare(f2.lastModified(), f1.lastModified()));
+                return matches[0];
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
         @Override
         public void run() {
             if (stopped) return;
             try {
-                if (file == null || !file.exists()) {
-                    file = new File(config.getLogPath());
-                    if (!file.exists()) {
-                        closeRaf();
-                        return;
-                    }
+                File target = resolveTargetFile(config.getLogPath());
+                if (target == null || !target.exists()) {
+                    closeRaf();
+                    return;
+                }
+
+                // 检测是否发生了按天/按序号滚动（例如 jeecgboot-2026-10-27.15.log -> 16.log 或跨天新文件）
+                if (file != null && !target.getAbsolutePath().equals(file.getAbsolutePath())) {
+                    System.out.println("[LogCollector] 检测到最新活跃文件切换: [" + file.getName() + "] -> [" + target.getName() + "]，自动接力增量采集 ✓");
+                    flushMultilineRecord();
+                    closeRaf();
+                    file = target;
+                    lastFileOffset = 0; // 新文件从头开始增量读
+                } else if (file == null) {
+                    file = target;
                 }
 
                 long curLen = file.length();
 
-                // 首次打开：从 EOF 游标开始读，绝不把几十G历史文件塞满网络！
+                // 首次打开：从 EOF 游标开始读，绝不把历史存量老日志塞满网络！
                 if (raf == null) {
                     raf = new RandomAccessFile(file, "r");
                     if (lastFileOffset < 0) {
@@ -184,9 +228,11 @@ public class LogCollector {
                     }
                 }
 
-                // 文件切割/轮转感知 (Log Rotation: 当前文件长度变小)
+                // 文件切割/轮转感知 (Log Rotation: 当前文件长度变小，如 app.log 被切割重命名为 app.log.1 并重建新 app.log)
                 if (curLen < lastFileOffset) {
                     System.out.println("[LogCollector] 检测到日志文件发生轮转切割 (Rotation): " + file.getName() + "，游标重置为 0");
+                    closeRaf();
+                    raf = new RandomAccessFile(file, "r");
                     lastFileOffset = 0;
                     raf.seek(0);
                 }
