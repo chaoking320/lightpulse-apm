@@ -67,3 +67,7 @@ monitor_db.*
 ehthumbs.db
 Thumbs.db
 desktop.ini
+
+# Private & Internal Documentation (DO NOT COMMIT)
+private-docs/
+docs/private/
