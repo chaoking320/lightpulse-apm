@@ -19,7 +19,17 @@ mybatis-plus:
     banner: false
 logging:
   level:
+    root: INFO
     com.monitor: INFO
+    com.baomidou.mybatisplus: INFO
+    org.mybatis: WARN
+  file:
+    name: logs/server.log
+  logback:
+    rollingpolicy:
+      max-file-size: 20MB
+      max-history: 7
+      total-size-cap: 300MB
 
 # LightPulse 监控系统配置
 monitor:
