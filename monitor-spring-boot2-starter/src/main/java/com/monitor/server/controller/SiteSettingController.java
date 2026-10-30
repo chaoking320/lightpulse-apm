@@ -42,8 +42,9 @@ public class SiteSettingController {
     public Map<String, Object> testWebhook(@RequestBody(required = false) Map<String, String> body) {
         String webhookUrl = (body != null) ? body.get("webhookUrl") : null;
         String webhookSecret = (body != null) ? body.get("webhookSecret") : null;
+        String atMobiles = (body != null) ? body.get("atMobiles") : null;
         try {
-            boolean ok = siteSettingService.testWebhook(webhookUrl, webhookSecret);
+            boolean ok = siteSettingService.testWebhook(webhookUrl, webhookSecret, atMobiles);
             if (ok) {
                 return Map.of("code", 200, "message", "Webhook 发送成功，钉钉已成功接收，请在群聊中查收测试消息！");
             } else {

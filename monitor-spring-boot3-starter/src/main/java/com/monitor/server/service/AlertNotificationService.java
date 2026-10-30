@@ -4,8 +4,7 @@ import com.monitor.server.entity.ApmAlertRecord;
 import com.monitor.server.repository.ApmAlertRecordRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -21,7 +20,6 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 统一多渠道告警通知服务
  * 支持发送企微/钉钉/飞书机器人 Webhook，支持告警静默降噪（防轰炸）
- * 集群环境通过 Redis 共享静默窗口，防止多节点重复告警
  */
 @Slf4j
 @Service
@@ -31,10 +29,7 @@ public class AlertNotificationService {
     private final ApmAlertRecordRepo alertRepo;
     private final SiteSettingService siteSettingService;
 
-    @Autowired(required = false)
-    private StringRedisTemplate stringRedisTemplate;
-
-    /** 告警静默窗口：同一类型和目标的告警在静默期内只通知一次 (本地内存降级) */
+    /** 告警静默窗口：同一类型和目标的告警在静默期内只通知一次 */
     private final Map<String, Long> silenceCache = new ConcurrentHashMap<>();
 
     private final HttpClient httpClient = HttpClient.newBuilder()
@@ -47,28 +42,18 @@ public class AlertNotificationService {
     public void triggerAlert(String alertType, String appName, String target,
                              BigDecimal currentValue, BigDecimal threshold,
                              String operator, String message) {
-        // 1. 检查告警静默降噪窗口：同一目标在静默期内（默认 30 分钟）不重复入库也不重复推送
+        // 1. 检查告警静默降噪窗口：同一目标在静默期内（默认 30 分钟）不重复入库也不重复推送，防止刷爆告警中心与群聊
         String silenceKey = alertType + ":" + appName + ":" + target;
         long now = System.currentTimeMillis();
+        Long lastTime = silenceCache.get(silenceKey);
         long silenceWindowMs = siteSettingService.getAlertSilenceWindowMs();
-
-        if (stringRedisTemplate != null) {
-            try {
-                String redisKey = "apm:silence:" + silenceKey;
-                Boolean isNew = stringRedisTemplate.opsForValue().setIfAbsent(redisKey, String.valueOf(now), Duration.ofMillis(silenceWindowMs));
-                if (Boolean.FALSE.equals(isNew)) {
-                    log.debug("[APM Alert] 集群告警在静默期内，跳过重复记录与通知: {}", silenceKey);
-                    return;
-                }
-            } catch (Exception re) {
-                log.warn("[APM Alert] Redis 检查静默窗口失败，降级本地缓存: {}", re.getMessage());
-                if (checkLocalSilence(silenceKey, now, silenceWindowMs)) return;
-            }
-        } else {
-            if (checkLocalSilence(silenceKey, now, silenceWindowMs)) return;
+        if (lastTime != null && (now - lastTime) < silenceWindowMs) {
+            log.debug("[Alert] 告警在静默期内，跳过重复记录与通知: {}", silenceKey);
+            return;
         }
+        silenceCache.put(silenceKey, now);
 
-        // 2. 保存告警记录到 DB
+        // 2. 保存告警记录到 DB (仅首次触发或跨越静默期后记录一条)
         ApmAlertRecord record = new ApmAlertRecord();
         record.setRuleId(0L);
         record.setRuleName(alertType);
@@ -86,27 +71,17 @@ public class AlertNotificationService {
         try {
             alertRepo.insert(record);
         } catch (Exception e) {
-            log.error("[APM Alert] 保存告警记录失败: {}", e.getMessage());
+            log.error("保存告警记录失败: {}", e.getMessage());
         }
 
         // 3. 异步发送 Webhook 消息
         sendWebhook(alertType, appName, target, message);
     }
 
-    private boolean checkLocalSilence(String silenceKey, long now, long silenceWindowMs) {
-        Long lastTime = silenceCache.get(silenceKey);
-        if (lastTime != null && (now - lastTime) < silenceWindowMs) {
-            log.debug("[APM Alert] 本地告警在静默期内，跳过重复记录与通知: {}", silenceKey);
-            return true;
-        }
-        silenceCache.put(silenceKey, now);
-        return false;
-    }
-
     private void sendWebhook(String alertType, String appName, String target, String message) {
         String webhookUrl = siteSettingService.getAlertWebhookUrl();
         if (webhookUrl == null || webhookUrl.trim().isEmpty()) {
-            log.info("[APM Alert] 未配置 Webhook，仅在本地日志输出告警: [{}] {} - {}", alertType, appName, message);
+            log.info("[Alert] 未配置 Webhook，仅在本地日志输出告警: [{}] {} - {}", alertType, appName, message);
             return;
         }
 
@@ -114,27 +89,56 @@ public class AlertNotificationService {
             String secret = siteSettingService.getAlertWebhookSecret();
             String sendUrl = SiteSettingService.signDingTalkUrl(webhookUrl.trim(), secret);
 
+            String mobiles = siteSettingService.getAlertAtMobiles();
+            boolean isAtAll = false;
+            java.util.List<String> mobileList = new java.util.ArrayList<>();
+            if (mobiles != null && !mobiles.isBlank()) {
+                if (mobiles.contains("@all") || mobiles.contains("@所有人")) {
+                    isAtAll = true;
+                } else {
+                    for (String part : mobiles.split("[,;，；\\s]+")) {
+                        String trimmed = part.trim();
+                        if (!trimmed.isEmpty()) {
+                            mobileList.add(trimmed);
+                        }
+                    }
+                }
+            }
+
+            // 兼容企业微信/钉钉/飞书 markdown 格式消息
             String jsonPayload;
             if (webhookUrl.contains("weixin.qq.com") || webhookUrl.contains("qyapi")) {
+                // 企业微信格式
+                String atText = "";
+                if (isAtAll) {
+                    atText = "\\n> **提醒人员**: @所有人";
+                } else if (!mobileList.isEmpty()) {
+                    atText = "\\n> **提醒人员**: " + String.join(" ", mobileList.stream().map(m -> "<@" + m + ">").toList());
+                }
                 jsonPayload = String.format("""
                     {
                         "msgtype": "markdown",
                         "markdown": {
-                            "content": "### <font color=\\"warning\\">【LightPulse 监控告警】</font>\\n> **告警类型**: %s\\n> **应用名称**: %s\\n> **监控目标**: %s\\n> **详细信息**: %s\\n> **时间**: %s"
+                            "content": "### <font color=\\"warning\\">【LightPulse 监控告警】</font>\\n> **告警类型**: %s\\n> **应用名称**: %s\\n> **监控目标**: %s\\n> **详细信息**: %s\\n> **时间**: %s%s"
                         }
                     }
-                    """, alertType, appName, target, message, LocalDateTime.now());
+                    """, alertType, appName, target, message, LocalDateTime.now(), atText);
             } else if (webhookUrl.contains("dingtalk.com")) {
-                jsonPayload = String.format("""
-                    {
-                        "msgtype": "markdown",
-                        "markdown": {
-                            "title": "LightPulse 监控告警",
-                            "text": "### 【LightPulse 监控告警】\\n- **告警类型**: %s\\n- **应用名称**: %s\\n- **监控目标**: %s\\n- **详细信息**: %s\\n- **时间**: %s"
-                        }
-                    }
-                    """, alertType, appName, target, message, LocalDateTime.now());
+                // 钉钉格式
+                String atText = "";
+                String atBlock = "";
+                if (isAtAll) {
+                    atText = "\\n- **提醒人员**: @所有人";
+                    atBlock = ", \"at\": {\"isAtAll\": true}";
+                } else if (!mobileList.isEmpty()) {
+                    atText = "\\n- **提醒人员**: " + String.join(" ", mobileList.stream().map(m -> "@" + m).toList());
+                    atBlock = ", \"at\": {\"atMobiles\": [" + String.join(",", mobileList.stream().map(m -> "\"" + m + "\"").toList()) + "], \"isAtAll\": false}";
+                }
+                String dtContent = String.format("### 【LightPulse 监控告警】\\n- **告警类型**: %s\\n- **应用名称**: %s\\n- **监控目标**: %s\\n- **详细信息**: %s\\n- **时间**: %s%s",
+                        alertType, appName, target, message, LocalDateTime.now(), atText);
+                jsonPayload = "{\"msgtype\": \"markdown\", \"markdown\": {\"title\": \"LightPulse 监控告警\", \"text\": \"" + dtContent + "\"}" + atBlock + "}";
             } else {
+                // 通用 Webhook 格式
                 jsonPayload = String.format("""
                     {
                         "alertType": "%s",
@@ -161,25 +165,25 @@ public class AlertNotificationService {
                                 com.fasterxml.jackson.databind.JsonNode node = new com.fasterxml.jackson.databind.ObjectMapper().readTree(body);
                                 int errcode = node.has("errcode") ? node.get("errcode").asInt() : 0;
                                 if (errcode != 0) {
-                                    log.error("[APM Alert] 钉钉 Webhook 拒绝接收告警 [errcode={}]: {} (请检查机器人安全设置：关键词是否命中、是否需配置加签 Secret、或出口 IP 白名单)",
+                                    log.error("[Alert] 钉钉 Webhook 拒绝接收告警 [errcode={}]: {} (请检查机器人安全设置：关键词是否命中、是否需配置加签 Secret、或出口 IP 白名单)",
                                             errcode, node.get("errmsg"));
                                     return;
                                 }
                             } catch (Exception ignored) {}
                         }
                         if (res.statusCode() >= 200 && res.statusCode() < 300) {
-                            log.info("[APM Alert] 告警 Webhook 发送成功: {}", alertType);
+                            log.info("[Alert] 告警 Webhook 发送成功: {}", alertType);
                         } else {
-                            log.warn("[APM Alert] 告警 Webhook 返回错误码 {}: {}", res.statusCode(), body);
+                            log.warn("[Alert] 告警 Webhook 返回错误码 {}: {}", res.statusCode(), body);
                         }
                     })
                     .exceptionally(ex -> {
-                        log.warn("[APM Alert] 告警 Webhook 请求异常: {}", ex.getMessage());
+                        log.warn("[Alert] 告警 Webhook 请求异常: {}", ex.getMessage());
                         return null;
                     });
 
         } catch (Exception e) {
-            log.warn("[APM Alert] 构建告警消息异常: {}", e.getMessage());
+            log.warn("[Alert] 构建告警消息异常: {}", e.getMessage());
         }
     }
 }

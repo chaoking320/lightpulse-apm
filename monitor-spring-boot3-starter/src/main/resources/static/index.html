@@ -2646,6 +2646,7 @@ function SettingsTab({ setupStatus, onOpenWizard }) {
     data_retention_days: '30',
     alert_webhook_url: '',
     alert_webhook_secret: '',
+    alert_at_mobiles: '',
     report_interval_seconds: '10',
     heartbeat_timeout_seconds: '60',
     disk_alert_threshold_percent: '88',
@@ -2684,7 +2685,7 @@ function SettingsTab({ setupStatus, onOpenWizard }) {
     api('/api/v1/settings/test-webhook', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({webhookUrl: form.alert_webhook_url, webhookSecret: form.alert_webhook_secret})
+      body: JSON.stringify({webhookUrl: form.alert_webhook_url, webhookSecret: form.alert_webhook_secret, atMobiles: form.alert_at_mobiles})
     }).then(r => {
       alert(r.message);
     }).catch(err => {
@@ -2749,6 +2750,17 @@ function SettingsTab({ setupStatus, onOpenWizard }) {
             style:{width:'100%'}
           }),
           React.createElement('span', {style:{fontSize:12,color:'#888'}}, '钉钉安全设置提示：若未勾选加签，请在钉钉机器人中添加自定义关键词 “LightPulse” 或 “告警” 或 “监控”'))),
+
+      React.createElement('div', {className:'form-row', style:{marginBottom:18,alignItems:'flex-start'}},
+        React.createElement('label', {style:{width:160,fontWeight:600}}, '告警 @ 提醒人员 (钉钉/企微):'),
+        React.createElement('div', {style:{display:'flex',flexDirection:'column',gap:4,flex:1}},
+          React.createElement('input', {
+            value: form.alert_at_mobiles || '',
+            onChange: e=>setForm({...form, alert_at_mobiles: e.target.value}),
+            placeholder: '选填。钉钉填成员手机号，多个逗号隔开 (如 13800138000, 13900139000；填 @all 提醒全员)',
+            style:{width:'100%'}
+          }),
+          React.createElement('span', {style:{fontSize:12,color:'#888'}}, '钉钉/企微强提醒：发生告警时机器人自动 @ 对应人员手机并发送强提醒通知；若不填则正常发送不 @ 人员'))),
 
       React.createElement('div', {className:'form-row', style:{marginBottom:18}},
         React.createElement('label', {style:{width:160,fontWeight:600}}, '主机指标采集上报周期(秒):'),

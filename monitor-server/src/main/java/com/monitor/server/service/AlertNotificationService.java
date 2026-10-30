@@ -89,29 +89,54 @@ public class AlertNotificationService {
             String secret = siteSettingService.getAlertWebhookSecret();
             String sendUrl = SiteSettingService.signDingTalkUrl(webhookUrl.trim(), secret);
 
+            String mobiles = siteSettingService.getAlertAtMobiles();
+            boolean isAtAll = false;
+            java.util.List<String> mobileList = new java.util.ArrayList<>();
+            if (mobiles != null && !mobiles.isBlank()) {
+                if (mobiles.contains("@all") || mobiles.contains("@所有人")) {
+                    isAtAll = true;
+                } else {
+                    for (String part : mobiles.split("[,;，；\\s]+")) {
+                        String trimmed = part.trim();
+                        if (!trimmed.isEmpty()) {
+                            mobileList.add(trimmed);
+                        }
+                    }
+                }
+            }
+
             // 兼容企业微信/钉钉/飞书 markdown 格式消息
             String jsonPayload;
             if (webhookUrl.contains("weixin.qq.com") || webhookUrl.contains("qyapi")) {
                 // 企业微信格式
+                String atText = "";
+                if (isAtAll) {
+                    atText = "\\n> **提醒人员**: @所有人";
+                } else if (!mobileList.isEmpty()) {
+                    atText = "\\n> **提醒人员**: " + String.join(" ", mobileList.stream().map(m -> "<@" + m + ">").toList());
+                }
                 jsonPayload = String.format("""
                     {
                         "msgtype": "markdown",
                         "markdown": {
-                            "content": "### <font color=\\"warning\\">【LightPulse 监控告警】</font>\\n> **告警类型**: %s\\n> **应用名称**: %s\\n> **监控目标**: %s\\n> **详细信息**: %s\\n> **时间**: %s"
+                            "content": "### <font color=\\"warning\\">【LightPulse 监控告警】</font>\\n> **告警类型**: %s\\n> **应用名称**: %s\\n> **监控目标**: %s\\n> **详细信息**: %s\\n> **时间**: %s%s"
                         }
                     }
-                    """, alertType, appName, target, message, LocalDateTime.now());
+                    """, alertType, appName, target, message, LocalDateTime.now(), atText);
             } else if (webhookUrl.contains("dingtalk.com")) {
                 // 钉钉格式
-                jsonPayload = String.format("""
-                    {
-                        "msgtype": "markdown",
-                        "markdown": {
-                            "title": "LightPulse 监控告警",
-                            "text": "### 【LightPulse 监控告警】\\n- **告警类型**: %s\\n- **应用名称**: %s\\n- **监控目标**: %s\\n- **详细信息**: %s\\n- **时间**: %s"
-                        }
-                    }
-                    """, alertType, appName, target, message, LocalDateTime.now());
+                String atText = "";
+                String atBlock = "";
+                if (isAtAll) {
+                    atText = "\\n- **提醒人员**: @所有人";
+                    atBlock = ", \"at\": {\"isAtAll\": true}";
+                } else if (!mobileList.isEmpty()) {
+                    atText = "\\n- **提醒人员**: " + String.join(" ", mobileList.stream().map(m -> "@" + m).toList());
+                    atBlock = ", \"at\": {\"atMobiles\": [" + String.join(",", mobileList.stream().map(m -> "\"" + m + "\"").toList()) + "], \"isAtAll\": false}";
+                }
+                String dtContent = String.format("### 【LightPulse 监控告警】\\n- **告警类型**: %s\\n- **应用名称**: %s\\n- **监控目标**: %s\\n- **详细信息**: %s\\n- **时间**: %s%s",
+                        alertType, appName, target, message, LocalDateTime.now(), atText);
+                jsonPayload = "{\"msgtype\": \"markdown\", \"markdown\": {\"title\": \"LightPulse 监控告警\", \"text\": \"" + dtContent + "\"}" + atBlock + "}";
             } else {
                 // 通用 Webhook 格式
                 jsonPayload = String.format("""

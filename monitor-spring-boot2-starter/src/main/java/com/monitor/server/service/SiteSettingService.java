@@ -15,6 +15,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +57,7 @@ public class SiteSettingService {
         cache.put("memory_alert_threshold_percent", "90");
         cache.put("cpu_alert_threshold_percent", "90");
         cache.put("alert_silence_window_minutes", "30");
+        cache.put("alert_at_mobiles", "");
         cache.put("victoriametrics_url", defaultVmUrl != null ? defaultVmUrl : "http://127.0.0.1:8428");
 
         // 从数据库加载已保存的全局配置
@@ -146,6 +148,10 @@ public class SiteSettingService {
         return minutes * 60 * 1000L;
     }
 
+    public String getAlertAtMobiles() {
+        return cache.getOrDefault("alert_at_mobiles", "");
+    }
+
     public String getVictoriaMetricsUrl() {
         return cache.getOrDefault("victoriametrics_url", defaultVmUrl);
     }
@@ -189,12 +195,32 @@ public class SiteSettingService {
      * 发送测试告警消息以验证 Webhook 连通性
      */
     public boolean testWebhook(String targetUrl, String secret) throws Exception {
+        return testWebhook(targetUrl, secret, null);
+    }
+
+    public boolean testWebhook(String targetUrl, String secret, String atMobiles) throws Exception {
         String url = (targetUrl != null && !targetUrl.trim().isEmpty()) ? targetUrl.trim() : getAlertWebhookUrl();
         if (url == null || url.isEmpty()) {
             throw new IllegalArgumentException("未配置有效 Webhook URL 地址");
         }
         String sec = (secret != null && !secret.isBlank()) ? secret.trim() : getAlertWebhookSecret();
         String sendUrl = signDingTalkUrl(url, sec);
+
+        String mobiles = (atMobiles != null && !atMobiles.isBlank()) ? atMobiles.trim() : getAlertAtMobiles();
+        boolean isAtAll = false;
+        List<String> mobileList = new ArrayList<>();
+        if (mobiles != null && !mobiles.isBlank()) {
+            if (mobiles.contains("@all") || mobiles.contains("@所有人")) {
+                isAtAll = true;
+            } else {
+                for (String part : mobiles.split("[,;，；\\s]+")) {
+                    String trimmed = part.trim();
+                    if (!trimmed.isEmpty()) {
+                        mobileList.add(trimmed);
+                    }
+                }
+            }
+        }
 
         String jsonPayload;
         if (url.contains("weixin.qq.com") || url.contains("qyapi")) {
@@ -207,15 +233,18 @@ public class SiteSettingService {
                 }
                 """.formatted(LocalDateTime.now());
         } else if (url.contains("dingtalk.com")) {
-            jsonPayload = """
-                {
-                    "msgtype": "markdown",
-                    "markdown": {
-                        "title": "LightPulse 监控告警测试",
-                        "text": "### 【LightPulse 监控告警测试】\\n- Webhook 连通性测试成功 ✓\\n- **配置生效时间**: %s\\n- 站点告警通道已就绪！"
-                    }
-                }
-                """.formatted(LocalDateTime.now());
+            StringBuilder dtText = new StringBuilder();
+            dtText.append("### 【LightPulse 监控告警测试】\\n- Webhook 连通性测试成功 ✓\\n- **配置生效时间**: ").append(LocalDateTime.now()).append("\\n- 站点告警通道已就绪！");
+            String atBlock = "";
+            if (isAtAll) {
+                dtText.append("\\n- **提醒人员**: @所有人");
+                atBlock = ", \"at\": {\"isAtAll\": true}";
+            } else if (!mobileList.isEmpty()) {
+                dtText.append("\\n- **提醒人员**: ");
+                for (String m : mobileList) dtText.append("@").append(m).append(" ");
+                atBlock = ", \"at\": {\"atMobiles\": [" + String.join(",", mobileList.stream().map(m -> "\"" + m + "\"").toList()) + "], \"isAtAll\": false}";
+            }
+            jsonPayload = "{\"msgtype\": \"markdown\", \"markdown\": {\"title\": \"LightPulse 监控告警测试\", \"text\": \"" + dtText.toString() + "\"}" + atBlock + "}";
         } else {
             jsonPayload = """
                 {"event": "test", "message": "LightPulse Webhook 连通性测试成功", "timestamp": "%s"}
