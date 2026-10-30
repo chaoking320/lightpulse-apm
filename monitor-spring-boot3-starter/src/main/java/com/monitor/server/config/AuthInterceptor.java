@@ -64,13 +64,13 @@ public class AuthInterceptor implements HandlerInterceptor {
                 String method = request.getMethod();
                 if ("POST".equalsIgnoreCase(method) || "PUT".equalsIgnoreCase(method) || "DELETE".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method)) {
                     // 放行登出接口
-                    if (uri.endsWith("/api/auth/logout") || uri.endsWith("/api/v1/auth/logout")) {
+                    if (uri.contains("/auth/logout")) {
                         return true;
                     }
-                    log.warn("[Auth] 只读账号 (viewer) 尝试调用写接口被拒绝: URI={}, Method={}", uri, method);
+                    log.warn("[Auth] 只读账号 (VIEWER) 尝试调用写接口被拒绝: URI={}, Method={}", uri, method);
                     response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                     response.setContentType("application/json;charset=UTF-8");
-                    response.getWriter().write("{\"code\":403,\"message\":\"操作被拒绝：当前登录为只读账号 (viewer)，无权执行新增、修改或删除操作！\"}");
+                    response.getWriter().write("{\"code\":403,\"message\":\"操作被拒绝：当前登录为只读账号 (VIEWER)，无权执行新增、修改或删除操作！\"}");
                     return false;
                 }
             }
@@ -94,14 +94,11 @@ public class AuthInterceptor implements HandlerInterceptor {
     private boolean isPublicResource(String uri) {
         if (uri == null) return false;
         return uri.endsWith("/login.html")
-                || uri.contains("/api/auth/login")
-                || uri.contains("/api/v1/auth/login")
-                || uri.contains("/api/auth/captcha")
-                || uri.contains("/api/v1/auth/captcha")
-                || uri.contains("/api/auth/status")
-                || uri.contains("/api/v1/auth/status")
-                || uri.contains("/api/setup/status")
-                || uri.contains("/api/setup/health")
+                || uri.contains("/auth/login")
+                || uri.contains("/auth/captcha")
+                || uri.contains("/auth/status")
+                || uri.contains("/setup/status")
+                || uri.contains("/setup/health")
                 || uri.contains("/api/health")
                 || uri.endsWith("/favicon.ico")
                 || uri.contains("/assets/")

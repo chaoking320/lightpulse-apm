@@ -127,6 +127,8 @@ public class SystemMetricController {
                         record.setErrorMsg(str(pMap.get("errorMsg"), null));
                         record.setAssertPassed(Boolean.TRUE.equals(pMap.get("assertPassed")) ? 1 : 0);
                         record.setTokenRefreshed(Boolean.TRUE.equals(pMap.get("tokenRefreshed")) ? 1 : 0);
+                        record.setProbeType(str(pMap.get("probeType"), "HTTP"));
+                        record.setExtractedValue(str(pMap.get("extractedValue"), null));
                         record.setCreatedAt(LocalDateTime.now());
 
                         if (!storageEngineService.isPureEs()) {

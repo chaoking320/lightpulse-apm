@@ -1,12 +1,14 @@
 #!/bin/bash
 # ============================================================
-# LightPulse Server 启动脚本 (兼容 0.0.8 及历史快照包)
+# LightPulse Server 启动脚本 (兼容 0.0.9 及历史版本包)
 # ============================================================
 SERVER_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SERVER_DIR"
 
-# 自动寻找 jar 包：优先 0.0.8，其次SNAPSHOT包，避免因包名不匹配报假失败
-if [ -f "monitor-server-0.0.8.jar" ]; then
+# 自动寻找 jar 包：优先 0.0.9，其次 0.0.8，其次SNAPSHOT包
+if [ -f "monitor-server-0.0.9.jar" ]; then
+    JAR_NAME="monitor-server-0.0.9.jar"
+elif [ -f "monitor-server-0.0.8.jar" ]; then
     JAR_NAME="monitor-server-0.0.8.jar"
 elif [ -f "monitor-server-1.0.0-SNAPSHOT.jar" ]; then
     JAR_NAME="monitor-server-1.0.0-SNAPSHOT.jar"

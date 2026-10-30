@@ -29,6 +29,7 @@ public class SetupWizardController {
     @PostMapping("/clean-test-data")
     public Map<String, Object> cleanTestData() {
         try {
+            SystemMetricController.LATEST_HOST_METRICS.clear();
             jdbcTemplate.execute("TRUNCATE TABLE apm_system_metric");
             jdbcTemplate.execute("TRUNCATE TABLE apm_alert_record");
             jdbcTemplate.execute("TRUNCATE TABLE apm_application");

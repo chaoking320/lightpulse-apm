@@ -1,7 +1,10 @@
 package com.monitor.server.service;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.monitor.server.config.AuthConfig;
+import com.monitor.server.entity.ApmUser;
+import com.monitor.server.repository.ApmUserRepo;
 import javax.annotation.PostConstruct;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -11,13 +14,17 @@ import org.springframework.stereotype.Service;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 控制台安全登录与鉴权服务
- * 统一管理管理员密码验证、只读账号验证、Token 签发、失效校验与密码重置
+ * 控制台安全登录与权限中心服务 (User & RBAC Center)
+ * 1. 优先使用 MySQL / H2 数据库持久化多用户 (apm_user 表)
+ * 2. 兼容兜底本地 auth-config.json 配置文件并实现自动平滑无缝数据迁移
+ * 3. 统一 Token 鉴权、滑动窗口会话管理、多角色权限隔离与密码加密
  */
 @Slf4j
 @Service
@@ -28,6 +35,7 @@ public class AuthService {
     public static final String ROLE_VIEWER = "VIEWER";
 
     private final ObjectMapper objectMapper;
+    private final ApmUserRepo userRepo;
 
     @Getter
     private AuthConfig authConfig = new AuthConfig();
@@ -38,12 +46,53 @@ public class AuthService {
     /** 内存 Token 对应角色字典: Token -> 角色 (ADMIN / VIEWER) */
     private final Map<String, String> tokenRoles = new ConcurrentHashMap<>();
 
+    /** 内存 Token 对应用户名: Token -> username */
+    private final Map<String, String> tokenUsers = new ConcurrentHashMap<>();
+
     /** 默认 Token 有效期：7 天 */
     private static final long TOKEN_TTL_MS = 7L * 24 * 3600 * 1000;
 
     @PostConstruct
     public void init() {
         loadConfig();
+        autoMigrateUsersToDb();
+    }
+
+    /**
+     * 自动平滑迁移：若数据库 apm_user 表尚无数据，自动将配置文件的用户无缝导入数据库
+     */
+    public synchronized void autoMigrateUsersToDb() {
+        try {
+            Long count = userRepo.selectCount(null);
+            if (count == null || count == 0) {
+                // 1. 初始化默认/配置中的 admin
+                ApmUser admin = new ApmUser();
+                admin.setUsername(authConfig.getAdminUsername() != null ? authConfig.getAdminUsername().trim() : "admin");
+                admin.setPasswordHash(authConfig.getAdminPasswordHash() != null ? authConfig.getAdminPasswordHash() : sha256("admin123"));
+                admin.setRole(ROLE_ADMIN);
+                admin.setStatus(1);
+                admin.setRemark("超级管理员 (系统内置)");
+                admin.setCreatedAt(LocalDateTime.now());
+                admin.setUpdatedAt(LocalDateTime.now());
+                userRepo.insert(admin);
+
+                // 2. 初始化默认/配置中的 viewer
+                if (authConfig.isViewerEnabled()) {
+                    ApmUser viewer = new ApmUser();
+                    viewer.setUsername(authConfig.getViewerUsername() != null ? authConfig.getViewerUsername().trim() : "viewer");
+                    viewer.setPasswordHash(authConfig.getViewerPasswordHash() != null ? authConfig.getViewerPasswordHash() : sha256("viewer123"));
+                    viewer.setRole(ROLE_VIEWER);
+                    viewer.setStatus(1);
+                    viewer.setRemark("只读观察员 (系统内置)");
+                    viewer.setCreatedAt(LocalDateTime.now());
+                    viewer.setUpdatedAt(LocalDateTime.now());
+                    userRepo.insert(viewer);
+                }
+                log.info("[Auth] 已自动将系统用户迁移入库 apm_user 表，天然支持多节点集群一致性 ✓");
+            }
+        } catch (Exception e) {
+            log.warn("[Auth] 检查或迁移用户表 apm_user 提示: {}", e.getMessage());
+        }
     }
 
     /**
@@ -76,7 +125,6 @@ public class AuthService {
                 file.getParentFile().mkdirs();
             }
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, this.authConfig);
-            log.info("[Auth] 安全配置已持久化至: {}", file.getAbsolutePath());
         } catch (Exception e) {
             log.error("[Auth] 持久化安全配置失败: {}", e.getMessage());
         }
@@ -88,10 +136,10 @@ public class AuthService {
      */
     public String login(String username, String password) {
         if (!authConfig.isEnabled()) {
-            // 若鉴权关闭，直接签发通用 Token，具备管理员权限
             String token = generateToken();
             activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
             tokenRoles.put(token, ROLE_ADMIN);
+            tokenUsers.put(token, "admin");
             return token;
         }
 
@@ -101,19 +149,41 @@ public class AuthService {
 
         String trimmedUser = username.trim();
 
-        // 1. 验证超级管理员账号
+        // 1. 优先从数据库 apm_user 表验证用户
+        try {
+            ApmUser user = userRepo.selectOne(new LambdaQueryWrapper<ApmUser>().eq(ApmUser::getUsername, trimmedUser));
+            if (user != null) {
+                if (user.getStatus() != null && user.getStatus() == 0) {
+                    log.warn("[Auth] 用户 [{}] 登录失败: 该账号已被管理员禁用！", trimmedUser);
+                    return null;
+                }
+                if (matchPassword(password, user.getPasswordHash())) {
+                    String token = generateToken();
+                    activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
+                    tokenRoles.put(token, user.getRole() != null ? user.getRole().toUpperCase() : ROLE_VIEWER);
+                    tokenUsers.put(token, user.getUsername());
+                    log.info("[Auth] 用户 [{}] 登录成功，分配角色: {}", trimmedUser, user.getRole());
+                    return token;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("[Auth] 数据库查验用户异常，回退至文件配置校验: {}", e.getMessage());
+        }
+
+        // 2. 兜底验证配置文件中的超级管理员账号
         if (authConfig.getAdminUsername() != null && authConfig.getAdminUsername().trim().equalsIgnoreCase(trimmedUser)) {
             String storedHash = authConfig.getAdminPasswordHash();
             if (matchPassword(password, storedHash)) {
                 String token = generateToken();
                 activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
                 tokenRoles.put(token, ROLE_ADMIN);
+                tokenUsers.put(token, trimmedUser);
                 log.info("[Auth] 管理员 [{}] 登录成功，分配 ADMIN 权限", trimmedUser);
                 return token;
             }
         }
 
-        // 2. 验证只读观察员账号
+        // 3. 兜底验证配置文件中的只读观察员账号
         if (authConfig.isViewerEnabled() && authConfig.getViewerUsername() != null
                 && authConfig.getViewerUsername().trim().equalsIgnoreCase(trimmedUser)) {
             String storedHash = authConfig.getViewerPasswordHash();
@@ -121,6 +191,7 @@ public class AuthService {
                 String token = generateToken();
                 activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
                 tokenRoles.put(token, ROLE_VIEWER);
+                tokenUsers.put(token, trimmedUser);
                 log.info("[Auth] 只读观察员 [{}] 登录成功，分配 VIEWER 只读权限", trimmedUser);
                 return token;
             }
@@ -138,9 +209,6 @@ public class AuthService {
         return sha256(rawPassword).equalsIgnoreCase(storedHash);
     }
 
-    /**
-     * 获取 Token 对应的用户角色 (ADMIN / VIEWER)
-     */
     public String getRole(String token) {
         if (!authConfig.isEnabled()) {
             return ROLE_ADMIN;
@@ -149,9 +217,11 @@ public class AuthService {
         return tokenRoles.getOrDefault(token.trim(), ROLE_ADMIN);
     }
 
-    /**
-     * 校验 Token 是否有效，有效则自动续期（滑动窗口）
-     */
+    public String getUsername(String token) {
+        if (token == null) return "admin";
+        return tokenUsers.getOrDefault(token.trim(), "admin");
+    }
+
     public boolean validateToken(String token) {
         if (!authConfig.isEnabled()) {
             return true;
@@ -166,26 +236,21 @@ public class AuthService {
         if (System.currentTimeMillis() > expireTime) {
             activeTokens.remove(token.trim());
             tokenRoles.remove(token.trim());
+            tokenUsers.remove(token.trim());
             return false;
         }
-        // 自动续期
         activeTokens.put(token.trim(), System.currentTimeMillis() + TOKEN_TTL_MS);
         return true;
     }
 
-    /**
-     * 登出
-     */
     public void logout(String token) {
         if (token != null) {
             activeTokens.remove(token.trim());
             tokenRoles.remove(token.trim());
+            tokenUsers.remove(token.trim());
         }
     }
 
-    /**
-     * 修改管理员或只读账号密码
-     */
     public synchronized boolean changePassword(String username, String oldPassword, String newPassword) {
         if (newPassword == null || newPassword.trim().length() < 5) {
             throw new IllegalArgumentException("新密码长度不能少于 5 位");
@@ -196,29 +261,166 @@ public class AuthService {
         if (token == null) {
             return false;
         }
+
+        String newHash = sha256(newPassword.trim());
+
+        // 同步更新数据库
+        try {
+            ApmUser dbUser = userRepo.selectOne(new LambdaQueryWrapper<ApmUser>().eq(ApmUser::getUsername, trimmedUser));
+            if (dbUser != null) {
+                dbUser.setPasswordHash(newHash);
+                dbUser.setUpdatedAt(LocalDateTime.now());
+                userRepo.updateById(dbUser);
+            }
+        } catch (Exception ignored) {}
+
+        // 同步更新配置文件
         if (trimmedUser.equalsIgnoreCase(authConfig.getAdminUsername())) {
-            authConfig.setAdminPasswordHash(sha256(newPassword.trim()));
+            authConfig.setAdminPasswordHash(newHash);
             saveConfig();
-            activeTokens.clear();
-            tokenRoles.clear();
-            log.info("[Auth] 管理员 [{}] 密码已修改，所有在线会话已失效", trimmedUser);
-            return true;
         } else if (authConfig.isViewerEnabled() && trimmedUser.equalsIgnoreCase(authConfig.getViewerUsername())) {
-            authConfig.setViewerPasswordHash(sha256(newPassword.trim()));
+            authConfig.setViewerPasswordHash(newHash);
             saveConfig();
-            activeTokens.clear();
-            tokenRoles.clear();
-            log.info("[Auth] 只读账号 [{}] 密码已修改，所有在线会话已失效", trimmedUser);
-            return true;
         }
-        return false;
+
+        activeTokens.clear();
+        tokenRoles.clear();
+        tokenUsers.clear();
+        log.info("[Auth] 用户 [{}] 密码已修改，所有在线会话已失效", trimmedUser);
+        return true;
     }
 
-    private String generateToken() {
+    // ==========================================
+    // 企业级多用户 RBAC 管理 API 服务
+    // ==========================================
+
+    public List<ApmUser> listUsers() {
+        autoMigrateUsersToDb();
+        List<ApmUser> users = userRepo.selectList(new LambdaQueryWrapper<ApmUser>().orderByAsc(ApmUser::getId));
+        for (ApmUser u : users) {
+            u.setPasswordHash("******"); // 掩码脱敏
+        }
+        return users;
+    }
+
+    public ApmUser createUser(ApmUser user, String rawPassword) {
+        if (user.getUsername() == null || user.getUsername().trim().isEmpty()) {
+            throw new IllegalArgumentException("用户名不能为空");
+        }
+        if (rawPassword == null || rawPassword.trim().length() < 5) {
+            throw new IllegalArgumentException("密码长度不能少于 5 位");
+        }
+
+        String uname = user.getUsername().trim();
+        Long exists = userRepo.selectCount(new LambdaQueryWrapper<ApmUser>().eq(ApmUser::getUsername, uname));
+        if (exists != null && exists > 0) {
+            throw new IllegalArgumentException("用户名 [" + uname + "] 已存在，请更换！");
+        }
+
+        user.setUsername(uname);
+        user.setPasswordHash(sha256(rawPassword.trim()));
+        user.setRole((user.getRole() != null && !user.getRole().isBlank()) ? user.getRole().toUpperCase() : ROLE_VIEWER);
+        user.setStatus(user.getStatus() != null ? user.getStatus() : 1);
+        user.setCreatedAt(LocalDateTime.now());
+        user.setUpdatedAt(LocalDateTime.now());
+        userRepo.insert(user);
+        user.setPasswordHash("******");
+        log.info("[Auth] 创建新用户成功: username={}, role={}", user.getUsername(), user.getRole());
+        return user;
+    }
+
+    public void updateUser(Long id, String role, Integer status, String remark, String newPassword) {
+        ApmUser user = userRepo.selectById(id);
+        if (user == null) {
+            throw new IllegalArgumentException("用户不存在 (ID=" + id + ")");
+        }
+
+        // 禁止降低 admin 权限或禁用 admin
+        boolean isAdmin = "admin".equalsIgnoreCase(user.getUsername());
+        if (isAdmin) {
+            if (status != null && status == 0) {
+                throw new IllegalArgumentException("超级管理员 admin 账号不允许被禁用！");
+            }
+            if (role != null && !ROLE_ADMIN.equalsIgnoreCase(role)) {
+                throw new IllegalArgumentException("超级管理员 admin 角色必须为 ADMIN！");
+            }
+        }
+
+        if (role != null && !role.isBlank()) {
+            user.setRole(role.toUpperCase());
+        }
+        if (status != null) {
+            user.setStatus(status);
+        }
+        if (remark != null) {
+            user.setRemark(remark);
+        }
+        if (newPassword != null && !newPassword.isBlank()) {
+            if (newPassword.trim().length() < 5) {
+                throw new IllegalArgumentException("新密码长度不能少于 5 位");
+            }
+            user.setPasswordHash(sha256(newPassword.trim()));
+            // 若修改了密码，强制其当前在线 token 失效
+            tokenUsers.forEach((tok, u) -> {
+                if (user.getUsername().equalsIgnoreCase(u)) {
+                    activeTokens.remove(tok);
+                    tokenRoles.remove(tok);
+                }
+            });
+        }
+        user.setUpdatedAt(LocalDateTime.now());
+        userRepo.updateById(user);
+        log.info("[Auth] 更新用户信息成功: ID={}, username={}", id, user.getUsername());
+    }
+
+    public void toggleUser(Long id) {
+        ApmUser user = userRepo.selectById(id);
+        if (user == null) {
+            throw new IllegalArgumentException("用户不存在");
+        }
+        if ("admin".equalsIgnoreCase(user.getUsername())) {
+            throw new IllegalArgumentException("超级管理员 admin 账号不允许被停用！");
+        }
+        int newStatus = (user.getStatus() == null || user.getStatus() == 1) ? 0 : 1;
+        user.setStatus(newStatus);
+        user.setUpdatedAt(LocalDateTime.now());
+        userRepo.updateById(user);
+        if (newStatus == 0) {
+            // 踢出下线
+            tokenUsers.forEach((tok, u) -> {
+                if (user.getUsername().equalsIgnoreCase(u)) {
+                    activeTokens.remove(tok);
+                    tokenRoles.remove(tok);
+                }
+            });
+        }
+        log.info("[Auth] 切换用户状态: username={}, status={}", user.getUsername(), newStatus);
+    }
+
+    public void deleteUser(Long id) {
+        ApmUser user = userRepo.selectById(id);
+        if (user == null) {
+            return;
+        }
+        if ("admin".equalsIgnoreCase(user.getUsername())) {
+            throw new IllegalArgumentException("超级管理员 admin 账号不允许被删除！");
+        }
+        userRepo.deleteById(id);
+        // 踢出下线
+        tokenUsers.forEach((tok, u) -> {
+            if (user.getUsername().equalsIgnoreCase(u)) {
+                activeTokens.remove(tok);
+                tokenRoles.remove(tok);
+            }
+        });
+        log.info("[Auth] 删除用户成功: ID={}, username={}", id, user.getUsername());
+    }
+
+    public String generateToken() {
         return UUID.randomUUID().toString().replace("-", "");
     }
 
-    private String sha256(String input) {
+    public static String sha256(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
@@ -239,7 +441,6 @@ public class AuthService {
         if (f1.exists()) return f1;
         File f2 = new File("monitor-server/data/auth-config.json");
         if (f2.exists()) return f2;
-
         return f1;
     }
 }

@@ -301,13 +301,52 @@ public class MonitorDatabaseInitializer implements CommandLineRunner {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='主机专属告警阈值配置';
             """);
 
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS `apm_user` (
+                    `id`                      BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    `username`                VARCHAR(64) NOT NULL,
+                    `password_hash`           VARCHAR(128) DEFAULT NULL,
+                    `password`                VARCHAR(128) DEFAULT NULL,
+                    `role`                    VARCHAR(32) NOT NULL DEFAULT 'VIEWER',
+                    `remark`                  VARCHAR(255) DEFAULT NULL,
+                    `status`                  INT NOT NULL DEFAULT 1,
+                    `created_at`              DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    `updated_at`              DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    `create_time`             DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    `update_time`             DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY `uk_username` (`username`)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='APM 企业多用户与权限中心';
+            """);
+
+
             // 增量字段平滑升级 (兼容已有旧版本数据库表)
+            safeAddColumn("apm_user", "password_hash", "VARCHAR(128) DEFAULT NULL");
+            safeAddColumn("apm_user", "created_at", "DATETIME DEFAULT CURRENT_TIMESTAMP");
+            safeAddColumn("apm_user", "updated_at", "DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+            try {
+                jdbcTemplate.execute("UPDATE `apm_user` SET `password_hash` = `password` WHERE `password_hash` IS NULL AND `password` IS NOT NULL");
+            } catch (Exception ignored) {}
+
             safeAddColumn("apm_probe_config", "group_id", "BIGINT DEFAULT NULL");
             safeAddColumn("apm_probe_config", "dispatch_mode", "VARCHAR(50) DEFAULT 'CLUSTER_SINGLE'");
             safeAddColumn("apm_probe_group", "dispatch_mode", "VARCHAR(50) DEFAULT 'CLUSTER_SINGLE'");
             safeAddColumn("apm_probe_group", "default_timeout_ms", "INT DEFAULT 5000");
             safeAddColumn("apm_system_metric", "env", "VARCHAR(50) DEFAULT 'prod'");
             safeAddColumn("apm_system_metric", "disk_details", "TEXT");
+            safeAddColumn("apm_probe_config", "probe_type", "VARCHAR(32) DEFAULT 'HTTP'");
+            safeAddColumn("apm_probe_config", "assert_json_path", "VARCHAR(255) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "assert_json_operator", "VARCHAR(32) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "assert_json_expected", "VARCHAR(255) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_query", "TEXT DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_datasource_url", "VARCHAR(500) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_username", "VARCHAR(128) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_password", "VARCHAR(128) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "assert_operator", "VARCHAR(16) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "assert_threshold", "DOUBLE DEFAULT NULL");
+
+            safeAddColumn("apm_probe_record", "probe_type", "VARCHAR(32) DEFAULT 'HTTP'");
+            safeAddColumn("apm_probe_record", "extracted_value", "VARCHAR(500) DEFAULT NULL");
+
 
             // 预置默认配置（存在则忽略）
             try {
@@ -321,7 +360,10 @@ public class MonitorDatabaseInitializer implements CommandLineRunner {
                     ('*', 'heartbeat_timeout_seconds', '60', '实例心跳失联超时判定(秒)', 1),
                     ('*', 'disk_alert_threshold_percent', '88', '磁盘使用率满载预警阈值(%)', 1),
                     ('*', 'memory_alert_threshold_percent', '90', '物理内存高压预警阈值(%)', 1),
-                    ('*', 'alert_silence_window_minutes', '30', '告警降噪静默窗口(分钟)', 1);
+                    ('*', 'alert_silence_window_minutes', '30', '告警降噪静默窗口(分钟)', 1),
+                    ('*', 'alert_quiet_hours_enabled', 'false', '夜间告警免打扰开关', 1),
+                    ('*', 'alert_quiet_hours_start', '23:00', '免打扰开始时间', 1),
+                    ('*', 'alert_quiet_hours_end', '08:00', '免打扰结束时间', 1);
                 """);
             } catch (Exception ignored) {}
 

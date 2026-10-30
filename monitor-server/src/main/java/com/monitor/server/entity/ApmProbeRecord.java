@@ -15,6 +15,10 @@ public class ApmProbeRecord {
     private String probeName;
     private String appName;
     private String hostName;
+
+    /** 探针类型: HTTP / SQL */
+    private String probeType = "HTTP";
+
     private String targetUrl;
     private Integer isSuccess;
     private Integer statusCode;
@@ -22,5 +26,9 @@ public class ApmProbeRecord {
     private String errorMsg;
     private Integer assertPassed;
     private Integer tokenRefreshed;
+
+    /** 提取或查询到的实际业务值 (如时间戳、延迟分钟数、SQL统计条数) */
+    private String extractedValue;
+
     private LocalDateTime createdAt;
 }

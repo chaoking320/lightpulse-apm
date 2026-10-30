@@ -139,6 +139,11 @@ public class AgentConfigLoader {
         pc.setAssertBodyContains(extractString(json, "assertBodyContains"));
         pc.setAssertBodyRegex(extractString(json, "assertBodyRegex"));
 
+        // 0.0.9 增强：JSONPath 业务数据提取与时间差/数值高级断言
+        pc.setAssertJsonPath(extractString(json, "assertJsonPath", "assert_json_path"));
+        pc.setAssertJsonOperator(extractString(json, "assertJsonOperator", "assert_json_operator"));
+        pc.setAssertJsonExpected(extractString(json, "assertJsonExpected", "assert_json_expected"));
+
         // 认证配置解析：优先从 tokenConfig JSON 字符串，若无则从外层扁平字段解析
         String tokenConfigStr = extractString(json, "tokenConfig");
         String tcSource = (tokenConfigStr != null && tokenConfigStr.contains("{")) ? tokenConfigStr : json;

@@ -66,6 +66,20 @@ public class HttpProbeRunner {
                 }
             }
 
+            // 0.0.9 增强：JSONPath 业务数据提取与时间差/数值高级断言
+            if (config.getAssertJsonPath() != null && !config.getAssertJsonPath().isBlank()) {
+                SimpleJsonPath.AssertResult jsonAssert = SimpleJsonPath.evaluate(
+                        responseBody,
+                        config.getAssertJsonPath(),
+                        config.getAssertJsonOperator(),
+                        config.getAssertJsonExpected()
+                );
+                if (!jsonAssert.isPassed()) {
+                    return ProbeResult.fail(config.getProbeName(), config.getAppName(), config.getUrl(),
+                            statusCode, costMs, jsonAssert.getMessage(), false);
+                }
+            }
+
             return ProbeResult.success(config.getProbeName(), config.getAppName(), config.getUrl(), statusCode, costMs, tokenRefreshed);
 
         } catch (Exception e) {

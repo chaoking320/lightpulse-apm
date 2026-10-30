@@ -58,6 +58,9 @@ public class SiteSettingService {
         cache.put("cpu_alert_threshold_percent", "90");
         cache.put("alert_silence_window_minutes", "30");
         cache.put("alert_at_mobiles", "");
+        cache.put("alert_quiet_hours_enabled", "0");
+        cache.put("alert_quiet_hours_start", "23:00");
+        cache.put("alert_quiet_hours_end", "08:00");
         cache.put("victoriametrics_url", defaultVmUrl != null ? defaultVmUrl : "http://127.0.0.1:8428");
 
         // 从数据库加载已保存的全局配置
@@ -295,6 +298,36 @@ public class SiteSettingService {
             try { return Math.max(Integer.parseInt(ms.trim()), 3000); } catch (Exception ignored) {}
         }
         return 10000;
+    }
+
+    /**
+     * 判断当前时间是否处于夜间告警免打扰时段
+     */
+    public boolean isQuietHours() {
+        try {
+            String enabled = cache.getOrDefault("alert_quiet_hours_enabled", "0");
+            if (!"1".equals(enabled) && !"true".equalsIgnoreCase(enabled)) {
+                return false;
+            }
+            String startStr = cache.getOrDefault("alert_quiet_hours_start", "23:00").trim();
+            String endStr = cache.getOrDefault("alert_quiet_hours_end", "08:00").trim();
+            java.time.LocalTime start = java.time.LocalTime.parse(startStr);
+            java.time.LocalTime end = java.time.LocalTime.parse(endStr);
+            java.time.LocalTime now = java.time.LocalTime.now();
+
+            if (start.isBefore(end)) {
+                return !now.isBefore(start) && !now.isAfter(end);
+            } else {
+                // 跨午夜时段 (如 23:00 至次日 08:00)
+                return !now.isBefore(start) || !now.isAfter(end);
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public String getQuietHoursRange() {
+        return cache.getOrDefault("alert_quiet_hours_start", "23:00") + " ~ " + cache.getOrDefault("alert_quiet_hours_end", "08:00");
     }
 
     private int parseInt(String val, int def) {

@@ -7,12 +7,12 @@ import com.monitor.server.entity.ApmSystemMetric;
 import com.monitor.server.repository.ApmAlertRecordRepo;
 import com.monitor.server.repository.ApmProbeRecordRepo;
 import com.monitor.server.repository.ApmSystemMetricRepo;
+import javax.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
 import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +33,7 @@ public class DataRetentionScheduler {
     private final ApmProbeRecordRepo probeRecordRepo;
     private final ApmAlertRecordRepo alertRecordRepo;
     private final com.monitor.server.repository.ApmLogRecordRepo logRecordRepo;
+    private final com.monitor.server.repository.ApmSlowSqlRepo slowSqlRepo;
 
     @PostConstruct
     public void init() {
@@ -51,7 +52,7 @@ public class DataRetentionScheduler {
         log.info("[DataRetention] 开始执行历史过期数据清理巡检，当前保留周期: {} 天", retentionDays);
         LocalDateTime threshold = LocalDateTime.now().minusDays(retentionDays);
 
-        // 1. 若启用了 Elasticsearch 存储，按天滚动物理索引直接 DROP 清理（毫秒级无压力释放物理磁盘）
+                // 1. 若启用了 Elasticsearch 存储，按天滚动物理索引直接 DROP 清理（毫秒级无压力释放物理磁盘）
         if (storageEngineService.isEsActive()) {
             esStorageService.cleanExpiredIndices(storageEngineService.getCurrentConfig(), retentionDays);
         }
@@ -69,6 +70,10 @@ public class DataRetentionScheduler {
                 try {
                     deletedLogs = logRecordRepo.delete(
                             new LambdaQueryWrapper<com.monitor.server.entity.ApmLogRecord>().lt(com.monitor.server.entity.ApmLogRecord::getCreatedAt, threshold));
+                } catch (Exception ignored) {}
+                try {
+                    slowSqlRepo.delete(
+                            new LambdaQueryWrapper<com.monitor.server.entity.ApmSlowSql>().lt(com.monitor.server.entity.ApmSlowSql::getOccurredAt, threshold));
                 } catch (Exception ignored) {}
             }
             // 已确认且超过保留周期的历史告警

@@ -40,6 +40,7 @@ public class ProbeConfigController {
     private final com.monitor.server.service.StorageEngineService storageEngineService;
     private final com.monitor.server.service.EsStorageService esStorageService;
     private final com.monitor.server.repository.ApmHostConfigRepo hostConfigRepo;
+    private final com.monitor.server.service.SqlProbeService sqlProbeService;
 
     @PostConstruct
     public void initDbAndPreload() {
@@ -115,6 +116,37 @@ public class ProbeConfigController {
             safeAddColumn("apm_probe_config", "dispatch_mode", "VARCHAR(50) DEFAULT 'CLUSTER_SINGLE'");
             safeAddColumn("apm_probe_group", "dispatch_mode", "VARCHAR(50) DEFAULT 'CLUSTER_SINGLE'");
             safeAddColumn("apm_probe_group", "default_timeout_ms", "INT DEFAULT 5000");
+
+            // 0.0.9 增强：企业级多用户中心数据表
+            jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS apm_user (
+                    id                  BIGINT PRIMARY KEY AUTO_INCREMENT,
+                    username            VARCHAR(100) NOT NULL,
+                    password_hash       VARCHAR(100) NOT NULL,
+                    role                VARCHAR(50) DEFAULT 'VIEWER',
+                    status              TINYINT DEFAULT 1,
+                    remark              VARCHAR(255) DEFAULT NULL,
+                    created_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_username (username)
+                )
+            """);
+
+            // 0.0.9 增强：探针字段扩展 (JSONPath 高级断言与 SQL 业务巡检)
+            safeAddColumn("apm_probe_config", "probe_type", "VARCHAR(20) DEFAULT 'HTTP'");
+            safeAddColumn("apm_probe_config", "assert_json_path", "VARCHAR(255) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "assert_json_operator", "VARCHAR(50) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "assert_json_expected", "VARCHAR(255) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_query", "TEXT DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_datasource_url", "VARCHAR(500) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_username", "VARCHAR(100) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "sql_password", "VARCHAR(200) DEFAULT NULL");
+            safeAddColumn("apm_probe_config", "assert_operator", "VARCHAR(20) DEFAULT '>'");
+            safeAddColumn("apm_probe_config", "assert_threshold", "DOUBLE DEFAULT NULL");
+
+            // 0.0.9 增强：探针巡检历史记录扩展
+            safeAddColumn("apm_probe_record", "probe_type", "VARCHAR(20) DEFAULT 'HTTP'");
+            safeAddColumn("apm_probe_record", "extracted_value", "VARCHAR(500) DEFAULT NULL");
 
         } catch (Exception e) {
             log.warn("初始化接口校验组数据表: {}", e.getMessage());
@@ -254,6 +286,10 @@ public class ProbeConfigController {
 
         List<ApmProbeConfig> resultList = new ArrayList<>();
         for (ApmProbeConfig probe : list) {
+            // SQL 探针由服务端自身调度执行，无需下发给 Agent
+            if ("SQL".equalsIgnoreCase(probe.getProbeType())) {
+                continue;
+            }
             if (probe.getGroupId() != null) {
                 ApmProbeGroup group = probeGroupRepo.selectById(probe.getGroupId());
                 // 若组被停用，整组下探针不分发给 Agent
@@ -344,10 +380,16 @@ public class ProbeConfigController {
     public Map<String, Object> createProbe(@RequestBody ApmProbeConfig config) {
         config.setCreatedAt(LocalDateTime.now());
         config.setUpdatedAt(LocalDateTime.now());
+
         if (config.getEnabled() == null) config.setEnabled(1);
         if (config.getIntervalSeconds() == null) config.setIntervalSeconds(3600);
         if (config.getTimeoutMs() == null || config.getTimeoutMs() <= 0) config.setTimeoutMs(30000);
         if (config.getAssertStatusCode() == null) config.setAssertStatusCode(200);
+        if (config.getProbeType() == null || config.getProbeType().isBlank()) config.setProbeType("HTTP");
+        if ("SQL".equalsIgnoreCase(config.getProbeType()) && (config.getTargetUrl() == null || config.getTargetUrl().isBlank())) {
+            config.setTargetUrl(config.getSqlDatasourceUrl() != null && !config.getSqlDatasourceUrl().isBlank() ? config.getSqlDatasourceUrl() : "default-datasource");
+        }
+
 
         // 如果关联了校验组且未单独设置认证，同步校验组的认证配置
         if (config.getGroupId() != null) {
@@ -372,7 +414,11 @@ public class ProbeConfigController {
     @PutMapping("/probes/{id}")
     public Map<String, Object> updateProbe(@PathVariable("id") Long id, @RequestBody ApmProbeConfig config) {
         config.setId(id);
+        if ("SQL".equalsIgnoreCase(config.getProbeType()) && (config.getTargetUrl() == null || config.getTargetUrl().isBlank())) {
+            config.setTargetUrl(config.getSqlDatasourceUrl() != null && !config.getSqlDatasourceUrl().isBlank() ? config.getSqlDatasourceUrl() : "default-datasource");
+        }
         config.setUpdatedAt(LocalDateTime.now());
+
         if (config.getGroupId() != null) {
             ApmProbeGroup group = probeGroupRepo.selectById(config.getGroupId());
             if (group != null) {
@@ -494,6 +540,116 @@ public class ProbeConfigController {
     /**
      * 控制台：查询探针巡检明细历史记录 (支持分页与状态筛选)
      */
+    /**
+     * 控制台：在线测试 SQL 业务探针
+     */
+    @PostMapping("/probes/test-sql")
+    public Map<String, Object> testSqlProbe(@RequestBody Map<String, Object> payload) {
+        String sql = payload.get("sqlQuery") != null ? String.valueOf(payload.get("sqlQuery")) : "";
+        String url = payload.get("sqlDatasourceUrl") != null ? String.valueOf(payload.get("sqlDatasourceUrl")) : null;
+        String user = payload.get("sqlUsername") != null ? String.valueOf(payload.get("sqlUsername")) : null;
+        String pass = payload.get("sqlPassword") != null ? String.valueOf(payload.get("sqlPassword")) : null;
+        String op = payload.get("assertOperator") != null ? String.valueOf(payload.get("assertOperator")) : ">";
+        Double threshold = payload.get("assertThreshold") instanceof Number ? ((Number) payload.get("assertThreshold")).doubleValue() : null;
+
+        return sqlProbeService.testSql(sql, url, user, pass, op, threshold);
+    }
+
+    /**
+     * 控制台：在线测试 HTTP 接口探针与 JSONPath 断言
+     */
+    @PostMapping("/probes/test")
+    public Map<String, Object> testHttpProbe(@RequestBody Map<String, Object> payload) {
+        long start = System.currentTimeMillis();
+        String url = payload.get("targetUrl") != null ? String.valueOf(payload.get("targetUrl")).trim() : "";
+        if (url.isEmpty()) {
+            return Map.of("code", 400, "message", "目标 URL 不能为空");
+        }
+
+        String method = payload.get("httpMethod") != null ? String.valueOf(payload.get("httpMethod")).toUpperCase() : "GET";
+        String body = payload.get("requestBody") != null ? String.valueOf(payload.get("requestBody")) : null;
+        int expectedStatus = payload.get("assertStatusCode") instanceof Number ? ((Number) payload.get("assertStatusCode")).intValue() : 200;
+        String contains = payload.get("assertBodyContains") != null ? String.valueOf(payload.get("assertBodyContains")).trim() : "";
+        String regex = payload.get("assertBodyRegex") != null ? String.valueOf(payload.get("assertBodyRegex")).trim() : "";
+        String jsonPath = payload.get("assertJsonPath") != null ? String.valueOf(payload.get("assertJsonPath")).trim() : "";
+        String jsonOp = payload.get("assertJsonOperator") != null ? String.valueOf(payload.get("assertJsonOperator")).trim() : "";
+        String jsonExp = payload.get("assertJsonExpected") != null ? String.valueOf(payload.get("assertJsonExpected")).trim() : "";
+
+        try {
+            java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+                    .connectTimeout(java.time.Duration.ofSeconds(5))
+                    .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                    .build();
+
+            var reqBuilder = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .timeout(java.time.Duration.ofSeconds(10));
+
+            if (payload.get("staticHeaderName") != null && payload.get("staticHeaderValue") != null) {
+                String hn = String.valueOf(payload.get("staticHeaderName")).trim();
+                String hv = String.valueOf(payload.get("staticHeaderValue")).trim();
+                if (!hn.isEmpty() && !hv.isEmpty()) {
+                    reqBuilder.header(hn, hv);
+                }
+            }
+
+            if ("POST".equalsIgnoreCase(method)) {
+                reqBuilder.POST(body != null && !body.isBlank()
+                        ? java.net.http.HttpRequest.BodyPublishers.ofString(body)
+                        : java.net.http.HttpRequest.BodyPublishers.noBody());
+                reqBuilder.header("Content-Type", "application/json;charset=UTF-8");
+            } else {
+                reqBuilder.GET();
+            }
+
+            var resp = client.send(reqBuilder.build(), java.net.http.HttpResponse.BodyHandlers.ofString(java.nio.charset.StandardCharsets.UTF_8));
+            long costMs = System.currentTimeMillis() - start;
+            int code = resp.statusCode();
+            String respBody = resp.body() != null ? resp.body() : "";
+
+            boolean passed = (code == expectedStatus);
+            String failReason = passed ? null : "状态码不匹配: 期望 " + expectedStatus + ", 实际 " + code;
+
+            if (passed && !contains.isEmpty()) {
+                if (!respBody.contains(contains)) {
+                    passed = false;
+                    failReason = "响应体未包含字符: " + contains;
+                }
+            }
+
+            if (passed && !regex.isEmpty()) {
+                if (!java.util.regex.Pattern.compile(regex).matcher(respBody).find()) {
+                    passed = false;
+                    failReason = "响应体未匹配正则: " + regex;
+                }
+            }
+
+            String extractedVal = "";
+            if (passed && !jsonPath.isEmpty()) {
+                var jRes = com.monitor.server.util.SimpleJsonPath.evaluate(respBody, jsonPath, jsonOp, jsonExp);
+                extractedVal = jRes.getExtractedValue();
+                if (!jRes.isPassed()) {
+                    passed = false;
+                    failReason = jRes.getMessage();
+                }
+            }
+
+            Map<String, Object> res = new HashMap<>();
+            res.put("code", 200);
+            res.put("success", passed);
+            res.put("statusCode", code);
+            res.put("costMs", costMs);
+            res.put("extractedValue", extractedVal);
+            res.put("message", passed ? "测试成功！接口响应正常" + (extractedVal.isEmpty() ? "" : " (提取值: " + extractedVal + ")") : failReason);
+            res.put("responsePreview", respBody.length() > 500 ? respBody.substring(0, 500) + "..." : respBody);
+            return res;
+
+        } catch (Exception e) {
+            long costMs = System.currentTimeMillis() - start;
+            return Map.of("code", 400, "success", false, "costMs", costMs, "message", "请求测试异常: " + e.getMessage());
+        }
+    }
+
     @GetMapping("/probes/records")
     public Map<String, Object> getProbeRecords(
             @RequestParam(value = "page", defaultValue = "1") int page,
@@ -626,15 +782,29 @@ public class ProbeConfigController {
             @RequestParam(value = "appName", required = false) String appName,
             @RequestParam("hostName") String hostName,
             @RequestParam(value = "ipAddress", required = false) String ipAddress) {
+        // 1. 立即清除服务端 JVM 内存中的实时极速缓存（彻底杜绝点击移除后刷新页面幽灵重现）
+        SystemMetricController.LATEST_HOST_METRICS.entrySet().removeIf(entry -> {
+            ApmSystemMetric m = entry.getValue();
+            boolean matchHost = hostName.equals(m.getHostName()) || entry.getKey().endsWith("::" + hostName);
+            boolean matchApp = (appName == null || appName.isBlank() || appName.equals(m.getAppName()));
+            boolean matchIp = (ipAddress == null || ipAddress.isBlank() || ipAddress.equals(m.getIpAddress()));
+            return matchHost && matchApp && matchIp;
+        });
+
+        // 2. 从本地数据库删除主机历史指标
         var wrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ApmSystemMetric>();
         wrapper.eq(ApmSystemMetric::getHostName, hostName);
         if (appName != null && !appName.isBlank()) wrapper.eq(ApmSystemMetric::getAppName, appName);
         if (ipAddress != null && !ipAddress.isBlank()) wrapper.eq(ApmSystemMetric::getIpAddress, ipAddress);
         int count = systemMetricRepo.delete(wrapper);
 
+        // 3. 从本地数据库删除应用在线实例注册
         try {
-            applicationRepo.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ApmApplication>()
-                    .eq(ApmApplication::getHostName, hostName));
+            var appWrapper = new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ApmApplication>()
+                    .eq(ApmApplication::getHostName, hostName);
+            if (appName != null && !appName.isBlank()) appWrapper.eq(ApmApplication::getAppName, appName);
+            if (ipAddress != null && !ipAddress.isBlank()) appWrapper.eq(ApmApplication::getIpAddress, ipAddress);
+            applicationRepo.delete(appWrapper);
         } catch (Exception ignored) {}
 
         if (storageEngineService.isEsActive()) {
@@ -686,6 +856,7 @@ public class ProbeConfigController {
         } else {
             config.setCreatedAt(LocalDateTime.now());
             config.setUpdatedAt(LocalDateTime.now());
+
             hostConfigRepo.insert(config);
         }
         return Map.of("code", 200, "message", "主机阈值配置已保存");

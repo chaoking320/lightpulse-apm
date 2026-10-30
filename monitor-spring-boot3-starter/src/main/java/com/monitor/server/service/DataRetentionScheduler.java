@@ -33,6 +33,7 @@ public class DataRetentionScheduler {
     private final ApmProbeRecordRepo probeRecordRepo;
     private final ApmAlertRecordRepo alertRecordRepo;
     private final com.monitor.server.repository.ApmLogRecordRepo logRecordRepo;
+    private final com.monitor.server.repository.ApmSlowSqlRepo slowSqlRepo;
 
     @PostConstruct
     public void init() {
@@ -69,6 +70,10 @@ public class DataRetentionScheduler {
                 try {
                     deletedLogs = logRecordRepo.delete(
                             new LambdaQueryWrapper<com.monitor.server.entity.ApmLogRecord>().lt(com.monitor.server.entity.ApmLogRecord::getCreatedAt, threshold));
+                } catch (Exception ignored) {}
+                try {
+                    slowSqlRepo.delete(
+                            new LambdaQueryWrapper<com.monitor.server.entity.ApmSlowSql>().lt(com.monitor.server.entity.ApmSlowSql::getOccurredAt, threshold));
                 } catch (Exception ignored) {}
             }
             // 已确认且超过保留周期的历史告警

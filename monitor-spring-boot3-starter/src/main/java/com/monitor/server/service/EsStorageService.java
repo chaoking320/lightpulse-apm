@@ -455,13 +455,13 @@ public class EsStorageService {
                 String queryJson = String.format("{\"query\":{\"bool\":{\"must\":[%s]}}}", String.join(",", conditions));
 
                 HttpRequest.Builder req = HttpRequest.newBuilder()
-                        .uri(URI.create(cleanUrl + "/" + alias + "/_delete_by_query?conflicts=proceed"))
+                        .uri(URI.create(cleanUrl + "/" + alias + "*/_delete_by_query?conflicts=proceed&refresh=true"))
                         .header("Content-Type", "application/json")
                         .timeout(Duration.ofSeconds(10))
                         .POST(HttpRequest.BodyPublishers.ofString(queryJson, StandardCharsets.UTF_8));
                 addAuthHeader(req, config.getEsUsername(), config.getEsPassword());
-                httpClient.send(req.build(), HttpResponse.BodyHandlers.discarding());
-                log.info("[ES Storage] 成功异步从 ES 移除主机指标: app={}, host={}, ip={}", appName, hostName, ipAddress);
+                var resp = httpClient.send(req.build(), HttpResponse.BodyHandlers.ofString());
+                log.info("[ES Storage] 异步从 ES 移除主机指标: app={}, host={}, ip={}, code={}, resp={}", appName, hostName, ipAddress, resp.statusCode(), resp.body());
             } catch (Exception e) {
                 log.warn("[ES Storage] 从 ES 移除主机指标异常: {}", e.getMessage());
             }

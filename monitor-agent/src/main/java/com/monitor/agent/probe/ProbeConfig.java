@@ -26,6 +26,11 @@ public class ProbeConfig {
     private String assertBodyContains;
     private String assertBodyRegex;
 
+    /** 0.0.9 增强：JSONPath 业务数据提取与时间差/数值断言 */
+    private String assertJsonPath;
+    private String assertJsonOperator;
+    private String assertJsonExpected;
+
     private boolean enabled = true;
 
     // Getters and Setters
@@ -67,6 +72,15 @@ public class ProbeConfig {
 
     public String getAssertBodyRegex() { return assertBodyRegex; }
     public void setAssertBodyRegex(String assertBodyRegex) { this.assertBodyRegex = assertBodyRegex; }
+
+    public String getAssertJsonPath() { return assertJsonPath; }
+    public void setAssertJsonPath(String assertJsonPath) { this.assertJsonPath = assertJsonPath; }
+
+    public String getAssertJsonOperator() { return assertJsonOperator; }
+    public void setAssertJsonOperator(String assertJsonOperator) { this.assertJsonOperator = assertJsonOperator; }
+
+    public String getAssertJsonExpected() { return assertJsonExpected; }
+    public void setAssertJsonExpected(String assertJsonExpected) { this.assertJsonExpected = assertJsonExpected; }
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }

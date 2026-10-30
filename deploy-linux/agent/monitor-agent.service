@@ -1,16 +1,30 @@
 [Unit]
 Description=LightPulse Monitor Agent Service
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/lightpulse/agent
-ExecStart=/usr/bin/java -Xms16m -Xmx64m -jar /opt/lightpulse/agent/monitor-agent-1.0.0-SNAPSHOT.jar -c /opt/lightpulse/agent/config.json
+
+# 防多开清理：启动前杀死可能存在的游离老进程（开头的减号表示即便未匹配到进程返回1也忽略报错继续执行）
+ExecStartPre=-/usr/bin/pkill -9 -f monitor-agent.jar
+
+# JVM 堆内存限制：保持探针极轻量（16m~64m）
+Environment="JAVA_OPTS=-Xms16m -Xmx64m"
+
+# 核心启动命令（固定使用 monitor-agent.jar，自动读取 JVM 参数与配置文件）
+ExecStart=/usr/bin/env java $JAVA_OPTS -jar /opt/lightpulse/agent/monitor-agent.jar -c /opt/lightpulse/agent/config.json
+
+# 进程异常退出时 10 秒后自动拉起
 Restart=always
 RestartSec=10
+
+# 日志统一持久化到当前目录下的 agent.log
 StandardOutput=append:/opt/lightpulse/agent/agent.log
 StandardError=append:/opt/lightpulse/agent/agent.log
 
 [Install]
 WantedBy=multi-user.target
+

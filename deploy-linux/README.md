@@ -101,19 +101,25 @@ tail -f server.log
 
 ---
 
-## 四、部署 monitor-agent（探针客户端）
+## 四、部署 monitor-agent（探针客户端 · 生产标准方案）
 
 > 💡 **提示**：如果您的应用是集群部署（例如 3 台机器部署了同一个服务），**这 3 台机器都可以各部署一个 agent**。系统内置的 **Leader 抢占调度** 机制会确保：对于组内探活接口（如 `chatForEx`），3 台机器中仅有 1 台选举为 Leader 的机器会真正发起调用，绝不会造成同一接口被多次并发打扰！
 
-### 1. 创建 Agent 目录并上传文件
+### 1. 创建统一目录并配置 SFTP 写入权限
+在被监控服务器上执行以下命令创建标准运维目录，并给 SFTP 上传工具开放写入权限：
 ```bash
+# 创建统一目录
 mkdir -p /opt/lightpulse/agent
 
-# 将解压后的 agent/ 目录下全部文件上传至该服务器的 /opt/lightpulse/agent
-chmod +x /opt/lightpulse/agent/*.sh
+# 开放目录读写权限（防止 SFTP 工具上传时报 Permission denied）
+chmod -R 777 /opt/lightpulse
 ```
 
-### 2. 修改 `config.json`
+### 2. 上传核心文件并配置
+使用 SFTP 工具将以下文件上传至 `/opt/lightpulse/agent/`：
+1. **`monitor-agent.jar`**：主程序包（建议统一命名为不带版本号的 `monitor-agent.jar`）。
+2. **`config.json`**：配置文件。
+
 编辑 `/opt/lightpulse/agent/config.json`：
 ```json
 {
@@ -126,25 +132,67 @@ chmod +x /opt/lightpulse/agent/*.sh
 }
 ```
 - `appName`：当前机器承载的服务标识（如集群节点可设为 `jk-kms-backend-01`、`jk-kms-backend-02`）。
-- `serverUrl`：修改为第（三）步中 Server 监控中心的真实内网或公网 IP 地址。
+- `serverUrl`：修改为 Server 监控中心的真实内网或公网 IP 地址。
 - `probes`：保持留空 `[]` 即可。Agent 会自动从 Server 动态拉取所分配的探针任务与 Token。
 
-### 3. 启动 Agent
+### 3. 配置 Systemd 开机自启与进程守护（一劳永逸）
+在服务器上执行以下命令，一键写入 Systemd 服务：
 ```bash
-cd /opt/lightpulse/agent
-./start.sh
+cat << 'EOF' > /etc/systemd/system/monitor-agent.service
+[Unit]
+Description=LightPulse Monitor Agent Service
+After=network-online.target
+Wants=network-online.target
 
-# 查看实时日志
-tail -f agent.log
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/lightpulse/agent
+
+# 防多开清理：启动前杀死可能存在的游离老进程（开头的减号表示即便未匹配到进程返回1也忽略报错继续执行）
+ExecStartPre=-/usr/bin/pkill -9 -f monitor-agent.jar
+
+# JVM 堆内存限制：保持探针极轻量（16m~64m）
+Environment="JAVA_OPTS=-Xms16m -Xmx64m"
+
+# 核心启动命令
+ExecStart=/usr/bin/env java $JAVA_OPTS -jar /opt/lightpulse/agent/monitor-agent.jar -c /opt/lightpulse/agent/config.json
+
+# 异常退出 10s 后自动拉起（防意外崩溃）
+Restart=always
+RestartSec=10
+
+# 日志输出至 agent.log
+StandardOutput=append:/opt/lightpulse/agent/agent.log
+StandardError=append:/opt/lightpulse/agent/agent.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
 ```
-日志显示：
-```text
-[Monitor Agent] 注册成功: jk-kms-backend-01 ...
-[SystemMetricsReporter] 启动系统指标采集巡检上报, 上报周期=10000ms
-[ConfigFetcher] 从服务端同步到 2 个最新接口探针 ✓
-[TokenManager] 成功刷新动态 Token, 缓存Key=probe-group-1 ...
+
+### 4. 激活服务并启动
+```bash
+# 重载系统服务
+systemctl daemon-reload
+
+# 开启【开机自启】并【立即运行】
+systemctl enable --now monitor-agent
+
+# 查看运行状态
+systemctl status monitor-agent
 ```
-说明 Agent 已成功注册上线并开始纳管巡检。
+
+---
+
+### 5. 后续日常更新发布（极简两步法）
+以后每次更新代码发版，不再需要执行任何脚本：
+1. **上传新包**：把本地打包好的 jar 包直接覆盖上传到 `/opt/lightpulse/agent/monitor-agent.jar`；
+2. **重启生效**：在终端执行：
+   ```bash
+   systemctl restart monitor-agent
+   ```
+   *Systemd 会自动做安全平滑停机、读取新 jar 包，并带着 `-Xms16m -Xmx64m` 重启探针！*
 
 ---
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-JAR_NAME="monitor-agent-0.0.8.jar"
+JAR_NAME="monitor-agent-0.0.9.jar"
 if [ ! -f "$JAR_NAME" ]; then
     JAR_NAME=$(ls monitor-agent*.jar 2>/dev/null | grep -v sources | grep -v javadoc | head -n 1)
 fi

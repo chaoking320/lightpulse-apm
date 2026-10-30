@@ -79,6 +79,12 @@ public class AlertNotificationService {
     }
 
     private void sendWebhook(String alertType, String appName, String target, String message) {
+        if (siteSettingService.isQuietHours()) {
+            log.info("[Alert] 当前处于告警免打扰时段 ({})，跳过 Webhook 消息推送，告警已安全存入告警中心: [{}] {}",
+                    siteSettingService.getQuietHoursRange(), alertType, message);
+            return;
+        }
+
         String webhookUrl = siteSettingService.getAlertWebhookUrl();
         if (webhookUrl == null || webhookUrl.trim().isEmpty()) {
             log.info("[Alert] 未配置 Webhook，仅在本地日志输出告警: [{}] {} - {}", alertType, appName, message);

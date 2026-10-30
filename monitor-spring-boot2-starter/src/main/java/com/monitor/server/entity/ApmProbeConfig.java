@@ -14,15 +14,35 @@ public class ApmProbeConfig {
     private Long id;
     private String probeName;
     private String appName;
+
+    /** 探针类型: HTTP (默认接口巡检探活) / SQL (数据库业务指标巡检) */
+    private String probeType = "HTTP";
+
     private String targetUrl;
     private String httpMethod;
     private String requestHeaders;
     private String requestBody;
     private String authType;
     private String tokenConfig;
+
+    /** HTTP 基础断言 */
     private Integer assertStatusCode;
     private String assertBodyContains;
     private String assertBodyRegex;
+
+    /** 0.0.9 增强：JSONPath 业务数据提取与时间差/数值高级断言 */
+    private String assertJsonPath;
+    private String assertJsonOperator;
+    private String assertJsonExpected;
+
+    /** 0.0.9 增强：SQL 业务巡检配置 (SQL Probe Job) */
+    private String sqlQuery;
+    private String sqlDatasourceUrl;
+    private String sqlUsername;
+    private String sqlPassword;
+    private String assertOperator; // SQL 数值比对: >, >=, <, <=, ==, !=
+    private Double assertThreshold; // SQL 告警阈值
+
     private Long groupId;
     private String dispatchMode; // CLUSTER_SINGLE (默认集群单节点防重) / ALL_NODES (全节点广播)
     private Integer intervalSeconds;
