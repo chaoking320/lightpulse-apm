@@ -240,10 +240,6 @@ public class AuthService {
         File f2 = new File("monitor-server/data/auth-config.json");
         if (f2.exists()) return f2;
 
-        if (new File("src").exists()) {
-            return f1;
-        } else {
-            return f2;
-        }
+        return f1;
     }
 }
