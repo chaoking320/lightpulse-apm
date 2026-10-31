@@ -21,6 +21,27 @@ public class DashboardController {
     private final ApmSlowSqlRepo slowSqlRepo;
     private final ApmExceptionRepo exceptionRepo;
     private final ApmAgentConfigRepo configRepo;
+    private final com.monitor.server.service.DashboardService dashboardService;
+    private final com.monitor.server.service.HostProcessInspector hostProcessInspector;
+
+    /**
+     * 控制台：全景趋势监控大屏数据（支持全集群聚合与单机透视，支持 1h / 6h / 24h / 7d 历史走势）
+     */
+    @GetMapping("/dashboard/overview-trends")
+    public Map<String, Object> getOverviewTrends(
+            @RequestParam(value = "hostName", required = false, defaultValue = "ALL") String hostName,
+            @RequestParam(value = "range", required = false, defaultValue = "1h") String range) {
+        return dashboardService.getOverviewTrends(hostName, range);
+    }
+
+    /**
+     * 控制台：全机操作系统跨进程能耗与暴涨根因智能排查
+     */
+    @GetMapping("/system-metrics/process-snapshot")
+    public Map<String, Object> getProcessSnapshot(
+            @RequestParam(value = "hostName", required = false) String hostName) {
+        return Map.of("code", 200, "data", hostProcessInspector.captureSnapshot(hostName));
+    }
 
     /** 应用概览 */
     @GetMapping("/apps")

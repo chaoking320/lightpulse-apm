@@ -71,6 +71,27 @@ tr:hover td { background: #fafafa; }
 .engine-card.active { border-color: #1890ff; background: #e6f7ff; box-shadow: 0 2px 8px rgba(24,144,255,.15); }
 .engine-card .title { font-weight: 600; font-size: 14px; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; }
 .engine-card .desc { font-size: 12px; color: #666; line-height: 1.5; }
+
+/* Dashboard & Trend Charts Styles */
+.dashboard-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; padding: 12px 16px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+.dashboard-kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.dashboard-kpi-card { background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.dashboard-kpi-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.dashboard-chart-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px; }
+@media (max-width: 1024px) { .dashboard-chart-grid { grid-template-columns: 1fr; } }
+.dashboard-chart-box { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); display: flex; flex-direction: column; }
+.dashboard-chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px; }
+.dashboard-chart-title { font-size: 14px; font-weight: 600; color: #1e293b; display: flex; align-items: center; gap: 6px; }
+.dashboard-chart-legend { display: flex; align-items: center; gap: 12px; font-size: 11px; color: #64748b; flex-wrap: wrap; }
+.legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+/* Process RCA Badges & Diagnostics */
+.badge-cat-python { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+.badge-cat-es { background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; }
+.badge-cat-java { background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc; }
+.badge-cat-mysql { background: #e0e7ff; color: #4338ca; border: 1px solid #a5b4fc; }
+.badge-cat-system { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
 </style>
 </head>
 <body>
@@ -848,8 +869,1083 @@ function ExceptionsTab() {
             React.createElement('tbody',{},...rows))));
 }
 
+
+// ====== 首页全景趋势大屏与进程根因剖析组件 ======
+
+function SvgTrendChart({ timeline = [], series = [], unit = '%', height = 220, emptyText = '暂无趋势数据' }) {
+  const [hoverIndex, setHoverIndex] = useState(null);
+  const width = 800;
+  const padding = { top: 25, right: 30, bottom: 30, left: 55 };
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+
+  const len = timeline.length;
+  if (!len || series.length === 0 || !series.some(s => s.data && s.data.length > 0)) {
+    return React.createElement('div', {
+      style: { height: height + 'px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 13 }
+    }, '📊 ' + emptyText);
+  }
+
+  let maxVal = 1;
+  series.forEach(s => {
+    (s.data || []).forEach(v => {
+      const num = Number(v) || 0;
+      if (num > maxVal) maxVal = num;
+    });
+  });
+  if (unit === '%' && maxVal <= 100) {
+    maxVal = Math.max(20, Math.min(100, Math.ceil(maxVal * 1.15)));
+  } else {
+    maxVal = Math.max(5, Math.ceil(maxVal * 1.2));
+  }
+
+  const getX = i => padding.left + (len > 1 ? (i / (len - 1)) * plotW : plotW / 2);
+  const getY = val => padding.top + plotH - ((Math.max(0, Number(val) || 0) / maxVal) * plotH);
+
+  const handleMouseMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const rx = (e.clientX - rect.left) / rect.width;
+    const idx = Math.min(len - 1, Math.max(0, Math.round(rx * (len - 1))));
+    setHoverIndex(idx);
+  };
+
+  const handleMouseLeave = () => {
+    setHoverIndex(null);
+  };
+
+  const gridLines = [];
+  for (let step = 0; step <= 4; step++) {
+    const yVal = Math.round((maxVal / 4) * step * 10) / 10;
+    const yPos = getY(yVal);
+    gridLines.push(
+      React.createElement('line', {
+        key: 'grid-' + step,
+        x1: padding.left,
+        y1: yPos,
+        x2: width - padding.right,
+        y2: yPos,
+        stroke: '#f1f5f9',
+        strokeDasharray: '3,3',
+        strokeWidth: 1
+      }),
+      React.createElement('text', {
+        key: 'lbl-' + step,
+        x: padding.left - 8,
+        y: yPos + 4,
+        fill: '#94a3b8',
+        fontSize: 10,
+        textAnchor: 'end',
+        fontFamily: 'monospace'
+      }, yVal + (unit === '%' ? '%' : (unit ? unit.trim() : '')))
+    );
+  }
+
+  const xLabels = [];
+  const labelStep = Math.max(1, Math.floor(len / 7));
+  for (let i = 0; i < len; i += labelStep) {
+    xLabels.push(
+      React.createElement('text', {
+        key: 'xlbl-' + i,
+        x: getX(i),
+        y: height - 10,
+        fill: '#94a3b8',
+        fontSize: 10,
+        textAnchor: 'middle',
+        fontFamily: 'monospace'
+      }, timeline[i] || '')
+    );
+  }
+  if ((len - 1) % labelStep !== 0 && len > 1) {
+    xLabels.push(
+      React.createElement('text', {
+        key: 'xlbl-last',
+        x: getX(len - 1),
+        y: height - 10,
+        fill: '#94a3b8',
+        fontSize: 10,
+        textAnchor: 'middle',
+        fontFamily: 'monospace'
+      }, timeline[len - 1] || '')
+    );
+  }
+
+  const paths = [];
+  series.forEach((s, sIdx) => {
+    const pts = (s.data || []).map((v, i) => `${getX(i)},${getY(v)}`);
+    if (pts.length > 0) {
+      if (s.fill) {
+        const areaPath = `M ${getX(0)},${padding.top + plotH} L ` + pts.join(' L ') + ` L ${getX(pts.length - 1)},${padding.top + plotH} Z`;
+        paths.push(
+          React.createElement('path', {
+            key: 'area-' + sIdx,
+            d: areaPath,
+            fill: s.color || '#3b82f6',
+            fillOpacity: 0.15
+          })
+        );
+      }
+      paths.push(
+        React.createElement('path', {
+          key: 'line-' + sIdx,
+          d: 'M ' + pts.join(' L '),
+          fill: 'none',
+          stroke: s.color || '#3b82f6',
+          strokeWidth: 2.2,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round'
+        })
+      );
+    }
+  });
+
+  const hoverElements = [];
+  if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < len) {
+    const hx = getX(hoverIndex);
+    hoverElements.push(
+      React.createElement('line', {
+        key: 'hover-line',
+        x1: hx,
+        y1: padding.top,
+        x2: hx,
+        y2: padding.top + plotH,
+        stroke: '#64748b',
+        strokeWidth: 1.2,
+        strokeDasharray: '4,4'
+      })
+    );
+    series.forEach((s, sIdx) => {
+      const val = (s.data && s.data[hoverIndex] != null) ? s.data[hoverIndex] : 0;
+      const hy = getY(val);
+      hoverElements.push(
+        React.createElement('circle', {
+          key: 'hover-c-outer-' + sIdx,
+          cx: hx,
+          cy: hy,
+          r: 5,
+          fill: '#ffffff',
+          stroke: s.color,
+          strokeWidth: 2
+        }),
+        React.createElement('circle', {
+          key: 'hover-c-inner-' + sIdx,
+          cx: hx,
+          cy: hy,
+          r: 2.5,
+          fill: s.color
+        })
+      );
+    });
+  }
+
+  return React.createElement('div', {
+    style: { position: 'relative', width: '100%', userSelect: 'none' }
+  },
+    React.createElement('svg', {
+      viewBox: `0 0 ${width} ${height}`,
+      style: { width: '100%', height: height + 'px', display: 'block', overflow: 'visible' }
+    },
+      gridLines,
+      paths,
+      hoverElements,
+      xLabels,
+      React.createElement('rect', {
+        x: padding.left,
+        y: padding.top,
+        width: plotW,
+        height: plotH,
+        fill: 'transparent',
+        style: { cursor: 'crosshair' },
+        onMouseMove: handleMouseMove,
+        onMouseLeave: handleMouseLeave
+      })
+    ),
+    hoverIndex !== null && hoverIndex >= 0 && hoverIndex < len && React.createElement('div', {
+      style: {
+        position: 'absolute',
+        top: 8,
+        left: Math.min(Math.max(10, (getX(hoverIndex) / width) * 100), 75) + '%',
+        transform: 'translateX(-50%)',
+        background: 'rgba(15, 23, 42, 0.92)',
+        color: '#f8fafc',
+        padding: '6px 10px',
+        borderRadius: 6,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+        fontSize: 11,
+        pointerEvents: 'none',
+        zIndex: 10,
+        whiteSpace: 'nowrap'
+      }
+    },
+      React.createElement('div', { style: { fontWeight: 700, color: '#93c5fd', marginBottom: 3, borderBottom: '1px solid rgba(255,255,255,0.15)', paddingBottom: 2 } },
+        '⏱️ ' + timeline[hoverIndex]),
+      series.map((s, idx) => {
+        const val = (s.data && s.data[hoverIndex] != null) ? s.data[hoverIndex] : 0;
+        return React.createElement('div', {
+          key: idx,
+          style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }
+        },
+          React.createElement('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: s.color } }),
+          React.createElement('span', { style: { color: '#cbd5e1' } }, s.name + ':'),
+          React.createElement('strong', { style: { color: '#ffffff', marginLeft: 'auto' } }, val + (s.unit || unit))
+        );
+      })
+    )
+  );
+}
+
+function SvgBarChart({ timeline = [], series = [], height = 220, emptyText = '暂无事件记录' }) {
+  const [hoverIndex, setHoverIndex] = useState(null);
+  const width = 800;
+  const padding = { top: 25, right: 30, bottom: 30, left: 45 };
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+
+  const len = timeline.length;
+  if (!len || series.length === 0 || !series.some(s => s.data && s.data.length > 0)) {
+    return React.createElement('div', {
+      style: { height: height + 'px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 13 }
+    }, '📊 ' + emptyText);
+  }
+
+  let maxVal = 1;
+  series.forEach(s => {
+    (s.data || []).forEach(v => {
+      const num = Number(v) || 0;
+      if (num > maxVal) maxVal = num;
+    });
+  });
+  maxVal = Math.max(5, Math.ceil(maxVal * 1.25));
+
+  const getX = i => padding.left + (len > 1 ? (i / (len - 1)) * plotW : plotW / 2);
+  const getY = val => padding.top + plotH - ((Math.max(0, Number(val) || 0) / maxVal) * plotH);
+
+  const slotW = plotW / Math.max(1, len);
+  const barW = Math.max(3, Math.min(12, slotW * 0.35));
+
+  const handleMouseMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const rx = (e.clientX - rect.left) / rect.width;
+    const idx = Math.min(len - 1, Math.max(0, Math.round(rx * (len - 1))));
+    setHoverIndex(idx);
+  };
+
+  const handleMouseLeave = () => {
+    setHoverIndex(null);
+  };
+
+  const gridLines = [];
+  for (let step = 0; step <= 4; step++) {
+    const yVal = Math.round((maxVal / 4) * step);
+    const yPos = getY(yVal);
+    gridLines.push(
+      React.createElement('line', {
+        key: 'grid-' + step,
+        x1: padding.left,
+        y1: yPos,
+        x2: width - padding.right,
+        y2: yPos,
+        stroke: '#f1f5f9',
+        strokeDasharray: '3,3',
+        strokeWidth: 1
+      }),
+      React.createElement('text', {
+        key: 'lbl-' + step,
+        x: padding.left - 8,
+        y: yPos + 4,
+        fill: '#94a3b8',
+        fontSize: 10,
+        textAnchor: 'end',
+        fontFamily: 'monospace'
+      }, yVal)
+    );
+  }
+
+  const xLabels = [];
+  const labelStep = Math.max(1, Math.floor(len / 7));
+  for (let i = 0; i < len; i += labelStep) {
+    xLabels.push(
+      React.createElement('text', {
+        key: 'xlbl-' + i,
+        x: getX(i),
+        y: height - 10,
+        fill: '#94a3b8',
+        fontSize: 10,
+        textAnchor: 'middle',
+        fontFamily: 'monospace'
+      }, timeline[i] || '')
+    );
+  }
+  if ((len - 1) % labelStep !== 0 && len > 1) {
+    xLabels.push(
+      React.createElement('text', {
+        key: 'xlbl-last',
+        x: getX(len - 1),
+        y: height - 10,
+        fill: '#94a3b8',
+        fontSize: 10,
+        textAnchor: 'middle',
+        fontFamily: 'monospace'
+      }, timeline[len - 1] || '')
+    );
+  }
+
+  const bars = [];
+  for (let i = 0; i < len; i++) {
+    const cx = getX(i);
+    series.forEach((s, sIdx) => {
+      const val = (s.data && s.data[i] != null) ? s.data[i] : 0;
+      if (val > 0) {
+        const bh = (val / maxVal) * plotH;
+        const by = padding.top + plotH - bh;
+        const bx = sIdx === 0 ? cx - barW - 1 : cx + 1;
+        bars.push(
+          React.createElement('rect', {
+            key: `bar-${sIdx}-${i}`,
+            x: bx,
+            y: by,
+            width: barW,
+            height: Math.max(2, bh),
+            rx: 2,
+            fill: s.color || '#3b82f6',
+            fillOpacity: hoverIndex === i ? 1.0 : 0.85
+          })
+        );
+      }
+    });
+  }
+
+  const hoverElements = [];
+  if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < len) {
+    const hx = getX(hoverIndex);
+    hoverElements.push(
+      React.createElement('rect', {
+        key: 'hover-bg',
+        x: hx - slotW / 2,
+        y: padding.top,
+        width: slotW,
+        height: plotH,
+        fill: '#f8fafc',
+        fillOpacity: 0.6
+      })
+    );
+  }
+
+  return React.createElement('div', {
+    style: { position: 'relative', width: '100%', userSelect: 'none' }
+  },
+    React.createElement('svg', {
+      viewBox: `0 0 ${width} ${height}`,
+      style: { width: '100%', height: height + 'px', display: 'block', overflow: 'visible' }
+    },
+      gridLines,
+      hoverElements,
+      bars,
+      xLabels,
+      React.createElement('rect', {
+        x: padding.left,
+        y: padding.top,
+        width: plotW,
+        height: plotH,
+        fill: 'transparent',
+        style: { cursor: 'pointer' },
+        onMouseMove: handleMouseMove,
+        onMouseLeave: handleMouseLeave
+      })
+    ),
+    hoverIndex !== null && hoverIndex >= 0 && hoverIndex < len && React.createElement('div', {
+      style: {
+        position: 'absolute',
+        top: 8,
+        left: Math.min(Math.max(10, (getX(hoverIndex) / width) * 100), 75) + '%',
+        transform: 'translateX(-50%)',
+        background: 'rgba(15, 23, 42, 0.92)',
+        color: '#f8fafc',
+        padding: '6px 10px',
+        borderRadius: 6,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+        fontSize: 11,
+        pointerEvents: 'none',
+        zIndex: 10,
+        whiteSpace: 'nowrap'
+      }
+    },
+      React.createElement('div', { style: { fontWeight: 700, color: '#fcd34d', marginBottom: 3, borderBottom: '1px solid rgba(255,255,255,0.15)', paddingBottom: 2 } },
+        '⏱️ ' + timeline[hoverIndex]),
+      series.map((s, idx) => {
+        const val = (s.data && s.data[hoverIndex] != null) ? s.data[hoverIndex] : 0;
+        return React.createElement('div', {
+          key: idx,
+          style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }
+        },
+          React.createElement('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: s.color } }),
+          React.createElement('span', { style: { color: '#cbd5e1' } }, s.name + ':'),
+          React.createElement('strong', { style: { color: '#ffffff', marginLeft: 'auto' } }, val + ' 笔')
+        );
+      })
+    )
+  );
+}
+
+function ProcessRcaModal({ visible, hostName, onClose }) {
+  const [loading, setLoading] = useState(false);
+  const [snapshot, setSnapshot] = useState(null);
+  const [selectedHost, setSelectedHost] = useState(hostName || 'ALL');
+  const [hostList, setHostList] = useState([]);
+  const [cmdFilter, setCmdFilter] = useState('');
+  const [expandedCmdPid, setExpandedCmdPid] = useState(null);
+
+  useEffect(() => {
+    if (visible) {
+      setSelectedHost(hostName || 'ALL');
+      api('/api/v1/system-metrics/hosts').then(r => setHostList(r?.data || [])).catch(() => {});
+    }
+  }, [visible, hostName]);
+
+  const loadSnapshot = useCallback((hName) => {
+    setLoading(true);
+    const target = hName || selectedHost;
+    const url = (target && target !== 'ALL')
+      ? `/api/v1/system-metrics/process-snapshot?hostName=${encodeURIComponent(target)}`
+      : '/api/v1/system-metrics/process-snapshot';
+    api(url)
+      .then(res => {
+        if (res && res.data) {
+          setSnapshot(res.data);
+        }
+      })
+      .catch(err => {
+        alert('抓取进程能耗快照失败: ' + (err.message || '网络异常'));
+      })
+      .finally(() => setLoading(false));
+  }, [selectedHost]);
+
+  useEffect(() => {
+    if (visible) {
+      loadSnapshot(selectedHost);
+    }
+  }, [visible, selectedHost, loadSnapshot]);
+
+  if (!visible) return null;
+
+  const isHighMem = (snapshot?.memoryUsedPercent || 0) >= 80.0;
+  const isHighCpu = (snapshot?.cpuLoadPercent || 0) >= 70.0;
+
+  const getCatBadgeClass = (cat) => {
+    switch ((cat || '').toUpperCase()) {
+      case 'PYTHON': return 'badge-cat-python';
+      case 'ELASTICSEARCH': return 'badge-cat-es';
+      case 'JAVA_APP':
+      case 'JAVA_OTHER': return 'badge-cat-java';
+      case 'MYSQL': return 'badge-cat-mysql';
+      default: return 'badge-cat-system';
+    }
+  };
+
+  const getCatColor = (cat) => {
+    switch ((cat || '').toUpperCase()) {
+      case 'PYTHON': return '#10b981';
+      case 'ELASTICSEARCH': return '#f59e0b';
+      case 'JAVA_APP': return '#0284c7';
+      case 'JAVA_OTHER': return '#38bdf8';
+      case 'MYSQL': return '#6366f1';
+      default: return '#94a3b8';
+    }
+  };
+
+  const procs = (snapshot?.topProcesses || []).filter(p => {
+    if (!cmdFilter) return true;
+    const q = cmdFilter.toLowerCase();
+    return (p.processName || '').toLowerCase().includes(q)
+      || (p.commandLine || '').toLowerCase().includes(q)
+      || (p.user || '').toLowerCase().includes(q)
+      || String(p.pid).includes(q)
+      || (p.categoryLabel || '').toLowerCase().includes(q);
+  });
+
+  return React.createElement('div', { className: 'modal-mask' },
+    React.createElement('div', {
+      className: 'modal',
+      style: { width: 920, maxWidth: '96vw', maxHeight: '90vh', overflowY: 'auto', padding: 22 }
+    },
+      React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: 12, marginBottom: 16 }
+      },
+        React.createElement('div', {},
+          React.createElement('h3', { style: { margin: 0, fontSize: 17, display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: { fontSize: 20 } }, '⚡'),
+            '全机跨进程能耗与暴涨根因智能排查'
+          ),
+          React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginTop: 3 } },
+            '突破传统 JVM 堆盲区 · 穿透全机进程真实 RSS 物理内存与 CPU 负载 · 智能诊断失控元凶'
+          )
+        ),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('select', {
+            value: selectedHost,
+            onChange: (e) => setSelectedHost(e.target.value),
+            style: { padding: '4px 8px', fontSize: 12, border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff' }
+          },
+            React.createElement('option', { value: 'ALL' }, '🖥️ 本机 / 默认节点'),
+            hostList.map(h => React.createElement('option', { key: h.hostName, value: h.hostName },
+              (h.hostName || 'node') + (h.ipAddress ? ` (${h.ipAddress})` : '')
+            ))
+          ),
+          React.createElement('button', {
+            className: 'btn small',
+            disabled: loading,
+            onClick: () => loadSnapshot(selectedHost)
+          }, loading ? '⏳ 采样中...' : '🔄 重新抓取'),
+          React.createElement('button', {
+            className: 'btn small',
+            style: { border: 'none', background: 'transparent', fontSize: 18, color: '#94a3b8', cursor: 'pointer', padding: '0 6px' },
+            onClick: onClose
+          }, '✕')
+        )
+      ),
+
+      React.createElement('div', {
+        style: {
+          background: isHighMem ? 'linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%)' : 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
+          border: isHighMem ? '1px solid #fecdd3' : '1px solid #bbf7d0',
+          borderRadius: 8,
+          padding: '14px 18px',
+          marginBottom: 16,
+          boxShadow: '0 2px 6px rgba(0,0,0,0.03)'
+        }
+      },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'flex-start', gap: 10 } },
+          React.createElement('div', { style: { fontSize: 24, lineHeight: 1 } }, isHighMem ? '🚨' : '🟢'),
+          React.createElement('div', { style: { flex: 1 } },
+            React.createElement('div', {
+              style: {
+                fontWeight: 700,
+                fontSize: 14,
+                color: isHighMem ? '#9f1239' : '#166534',
+                marginBottom: 6
+              }
+            }, 'AI 智能能耗与根因穿透结论：'),
+            React.createElement('div', {
+              style: {
+                fontSize: 13,
+                lineHeight: 1.6,
+                color: isHighMem ? '#881337' : '#14532d',
+                whiteSpace: 'pre-wrap'
+              }
+            }, snapshot?.diagnosis || '正在分析操作系统进程调度能耗...')
+          )
+        )
+      ),
+
+      React.createElement('div', {
+        style: {
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: 10,
+          background: '#f8fafc',
+          border: '1px solid #e2e8f0',
+          borderRadius: 8,
+          padding: '10px 14px',
+          marginBottom: 16,
+          fontSize: 12
+        }
+      },
+        React.createElement('div', {},
+          React.createElement('span', { style: { color: '#64748b' } }, '🖥️ 主机节点: '),
+          React.createElement('strong', { style: { color: '#0f172a' } }, (snapshot?.hostName || '-') + (snapshot?.ipAddress ? ` (${snapshot.ipAddress})` : ''))
+        ),
+        React.createElement('div', {},
+          React.createElement('span', { style: { color: '#64748b' } }, '⚙️ 操作系统: '),
+          React.createElement('strong', { style: { color: '#0f172a' } }, snapshot?.osType || 'Linux')
+        ),
+        React.createElement('div', {},
+          React.createElement('span', { style: { color: '#64748b' } }, '💾 物理内存利用率: '),
+          React.createElement('strong', { style: { color: isHighMem ? '#ef4444' : '#10b981' } }, `${snapshot?.memoryUsedPercent || 0}%`)
+        ),
+        React.createElement('div', {},
+          React.createElement('span', { style: { color: '#64748b' } }, '⚡ 系统 CPU 负载: '),
+          React.createElement('strong', { style: { color: isHighCpu ? '#ef4444' : '#0f172a' } }, `${snapshot?.cpuLoadPercent || 0}%`)
+        ),
+        React.createElement('div', {},
+          React.createElement('span', { style: { color: '#64748b' } }, '⏱️ 采样时间: '),
+          React.createElement('span', { style: { color: '#64748b' } }, snapshot?.capturedAt || '-')
+        )
+      ),
+
+      React.createElement('div', { style: { marginBottom: 18 } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#334155' } }, '📊 整机物理内存能耗分类透视'),
+          React.createElement('span', { style: { fontSize: 11, color: '#64748b' } }, '按进程大类归集实际 RSS 占用')
+        ),
+        React.createElement('div', {
+          style: {
+            height: 20,
+            borderRadius: 6,
+            background: '#e2e8f0',
+            overflow: 'hidden',
+            display: 'flex',
+            boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.1)'
+          }
+        },
+          (snapshot?.categoryBreakdown || []).map((cat, idx) =>
+            cat.percent > 0 && React.createElement('div', {
+              key: idx,
+              style: {
+                width: `${Math.max(1, cat.percent)}%`,
+                background: getCatColor(cat.category),
+                transition: 'width 0.3s ease'
+              },
+              title: `${cat.label}: ${cat.formatted} (${cat.percent}%)`
+            })
+          )
+        ),
+        React.createElement('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 8 } },
+          (snapshot?.categoryBreakdown || []).map((cat, idx) =>
+            React.createElement('div', {
+              key: idx,
+              style: { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 }
+            },
+              React.createElement('span', {
+                style: { width: 10, height: 10, borderRadius: 3, background: getCatColor(cat.category) }
+              }),
+              React.createElement('span', { style: { color: '#475569' } }, cat.label),
+              React.createElement('strong', { style: { color: '#0f172a' } }, `${cat.formatted} (${cat.percent}%)`)
+            )
+          )
+        )
+      ),
+
+      React.createElement('div', {},
+        React.createElement('div', {
+          style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8 }
+        },
+          React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#334155', display: 'flex', alignItems: 'center', gap: 6 } },
+            '🏆 整机能耗消耗排行榜 Top 15',
+            React.createElement('span', { className: 'badge gray', style: { fontSize: 11 } }, `共 ${procs.length} 个重点进程`)
+          ),
+          React.createElement('input', {
+            type: 'text',
+            placeholder: '🔍 过滤 PID / 进程名 / 用户 / 参数...',
+            value: cmdFilter,
+            onChange: (e) => setCmdFilter(e.target.value),
+            style: { padding: '4px 10px', fontSize: 12, border: '1px solid #cbd5e1', borderRadius: 6, width: 220 }
+          })
+        ),
+        React.createElement('div', { className: 'table-wrap', style: { maxHeight: 320, overflowY: 'auto' } },
+          React.createElement('table', {},
+            React.createElement('thead', {},
+              React.createElement('tr', {},
+                React.createElement('th', { style: { width: 70 } }, 'PID'),
+                React.createElement('th', { style: { width: 120 } }, '能耗分类'),
+                React.createElement('th', { style: { width: 130 } }, '进程名 (COMM)'),
+                React.createElement('th', { style: { width: 80 } }, '用户'),
+                React.createElement('th', { style: { width: 100 } }, '物理内存 (RSS)'),
+                React.createElement('th', { style: { width: 70 } }, '内存%'),
+                React.createElement('th', { style: { width: 70 } }, 'CPU%'),
+                React.createElement('th', {}, '启动命令与运行参数 (CMD)')
+              )
+            ),
+            React.createElement('tbody', {},
+              procs.length === 0
+                ? React.createElement('tr', {}, React.createElement('td', { colSpan: 8, className: 'empty' }, '未发现匹配的运行进程'))
+                : procs.map((p, idx) => {
+                    const isExpanded = expandedCmdPid === p.pid;
+                    return React.createElement('tr', { key: p.pid || idx },
+                      React.createElement('td', { style: { fontFamily: 'monospace', fontWeight: 600 } }, p.pid),
+                      React.createElement('td', {},
+                        React.createElement('span', {
+                          className: 'badge ' + getCatBadgeClass(p.category),
+                          style: { fontSize: 11, padding: '2px 6px', borderRadius: 4 }
+                        }, p.categoryLabel || p.category)
+                      ),
+                      React.createElement('td', { style: { fontWeight: 600, color: '#0f172a' } }, p.processName || '-'),
+                      React.createElement('td', { style: { color: '#64748b' } }, p.user || '-'),
+                      React.createElement('td', { style: { fontWeight: 700, color: (p.memoryPercent || 0) > 20 ? '#ef4444' : '#0f172a' } },
+                        p.memoryFormatted || '0 B'
+                      ),
+                      React.createElement('td', { style: { color: (p.memoryPercent || 0) > 20 ? '#ef4444' : '#334155' } },
+                        `${p.memoryPercent != null ? p.memoryPercent : 0}%`
+                      ),
+                      React.createElement('td', { style: { color: (p.cpuPercent || 0) > 50 ? '#ef4444' : '#334155' } },
+                        `${p.cpuPercent != null ? p.cpuPercent : 0}%`
+                      ),
+                      React.createElement('td', {
+                        style: {
+                          maxWidth: 260,
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                          color: '#475569',
+                          cursor: 'pointer'
+                        },
+                        title: '点击可展开/收起完整启动参数',
+                        onClick: () => setExpandedCmdPid(isExpanded ? null : p.pid)
+                      },
+                        isExpanded
+                          ? React.createElement('div', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f1f5f9', padding: 6, borderRadius: 4 } }, p.commandLine || p.processName)
+                          : React.createElement('div', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, p.commandLine || p.processName)
+                      )
+                    );
+                  })
+            )
+          )
+        )
+      ),
+
+      React.createElement('div', {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginTop: 18,
+          paddingTop: 12,
+          borderTop: '1px solid #e2e8f0',
+          fontSize: 12,
+          color: '#64748b'
+        }
+      },
+        React.createElement('span', {}, '💡 提示：本诊断穿透 Linux / Windows 操作系统内核进程表毫秒级无感采集，无需为 Python/ES 额外安装任何探针。'),
+        React.createElement('button', {
+          className: 'btn',
+          onClick: onClose
+        }, '关闭')
+      )
+    )
+  );
+}
+
+function DashboardTab({ isViewer, onOpenProcessRca }) {
+  const [hostName, setHostName] = useState('ALL');
+  const [range, setRange] = useState('1h');
+  const [hosts, setHosts] = useState([]);
+  const [dashData, setDashData] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    api('/api/v1/system-metrics/hosts').then(r => {
+      setHosts(r?.data || []);
+    }).catch(() => {});
+  }, []);
+
+  const loadData = useCallback(() => {
+    setLoading(true);
+    const url = `/api/v1/dashboard/overview-trends?hostName=${encodeURIComponent(hostName)}&range=${encodeURIComponent(range)}`;
+    api(url)
+      .then(res => {
+        if (res && res.data) {
+          setDashData(res.data);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [hostName, range]);
+
+  useEffect(() => {
+    loadData();
+    const timer = setInterval(loadData, 15000);
+    return () => clearInterval(timer);
+  }, [loadData]);
+
+  const summary = dashData?.summary || {};
+  const timeline = dashData?.timeline || [];
+  const cpuTrend = dashData?.cpuTrend || {};
+  const memTrend = dashData?.memTrend || {};
+  const probeTrend = dashData?.probeTrend || {};
+  const incidentTrend = dashData?.incidentTrend || {};
+
+  const formatGbOrMb = (bytes) => {
+    if (!bytes) return '0 B';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return gb.toFixed(1) + ' GB';
+    const mb = bytes / (1024 * 1024);
+    return mb.toFixed(0) + ' MB';
+  };
+
+  const totalHosts = summary.totalHosts || (hosts.length > 0 ? hosts.length : 1);
+  const onlineHosts = summary.onlineHosts != null ? summary.onlineHosts : totalHosts;
+  const isAllOnline = onlineHosts >= totalHosts && totalHosts > 0;
+
+  const curCpu = summary.curCpu != null ? summary.curCpu : 0;
+  const curMem = summary.curMem != null ? summary.curMem : 0;
+  const usedMemBytes = summary.usedMemBytes || 0;
+  const totalMemBytes = summary.totalMemBytes || 0;
+
+  const todayProbeCalls = summary.todayProbeCalls || 0;
+  const probeSuccessRate = summary.probeSuccessRate != null ? summary.probeSuccessRate : 100;
+  const todaySlowSqls = summary.todaySlowSqls || 0;
+  const unackedAlerts = summary.unackedAlerts || 0;
+
+  return React.createElement('div', {},
+    React.createElement('div', { className: 'dashboard-toolbar' },
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' } },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#334155' } }, '📊 监控透视维度:'),
+          React.createElement('select', {
+            value: hostName,
+            onChange: (e) => setHostName(e.target.value),
+            style: { padding: '5px 12px', fontSize: 12, border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', fontWeight: 500 }
+          },
+            React.createElement('option', { value: 'ALL' }, '🌟 全集群全局透视 (All Nodes Aggregate)'),
+            hosts.map(h => React.createElement('option', { key: h.hostName, value: h.hostName },
+              `🖥️ ${h.hostName} (${h.ipAddress || 'unknown'})`
+            ))
+          )
+        ),
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#334155' } }, '⏱️ 时间跨度:'),
+          [
+            { key: '1h', label: '近 1小时' },
+            { key: '6h', label: '近 6小时' },
+            { key: '24h', label: '近 24小时' },
+            { key: '7d', label: '近 7天' }
+          ].map(opt =>
+            React.createElement('button', {
+              key: opt.key,
+              className: 'btn small' + (range === opt.key ? ' active' : ''),
+              style: range === opt.key ? { background: '#0284c7', color: '#fff', borderColor: '#0369a1', fontWeight: 600 } : {},
+              onClick: () => setRange(opt.key)
+            }, opt.label)
+          )
+        )
+      ),
+
+      React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+        React.createElement('button', {
+          className: 'btn small',
+          style: {
+            background: 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
+            color: '#ffffff',
+            borderColor: '#1d4ed8',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            boxShadow: '0 2px 4px rgba(37,99,235,0.2)'
+          },
+          onClick: () => onOpenProcessRca && onOpenProcessRca(hostName === 'ALL' ? '' : hostName),
+          title: '穿透排查全机所有操作系统进程与内存/CPU暴涨根因（如 Python、ES 与后台进程）'
+        },
+          React.createElement('span', { style: { fontSize: 14 } }, '⚡'),
+          '全机进程与暴涨诊断 (RCA)'
+        ),
+        React.createElement('button', {
+          className: 'btn small',
+          disabled: loading,
+          onClick: loadData
+        }, loading ? '⏳ 刷新中...' : '🔄 刷新大屏')
+      )
+    ),
+
+    React.createElement('div', { className: 'dashboard-kpi-grid' },
+      React.createElement('div', { className: 'dashboard-kpi-card' },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🖥️ 活跃集群节点'),
+          React.createElement('span', {
+            className: 'badge ' + (isAllOnline ? 'green' : 'gray'),
+            style: { fontSize: 10, padding: '1px 6px' }
+          }, isAllOnline ? '全节点正常' : '部分节点异常')
+        ),
+        React.createElement('div', { style: { fontSize: 24, fontWeight: 700, color: onlineHosts > 0 ? '#10b981' : '#94a3b8', marginTop: 4 } },
+          onlineHosts,
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 4 } }, `/ ${totalHosts} 台在线`)
+        ),
+        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4 } },
+          hostName === 'ALL' ? '集群多实例健康探活协同' : `单机专属模式 (${hostName})`
+        )
+      ),
+
+      React.createElement('div', { className: 'dashboard-kpi-card' },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '⚡ 实时系统算力'),
+          React.createElement('span', {
+            className: 'badge ' + (curCpu > 80 ? 'red' : 'green'),
+            style: { fontSize: 10, padding: '1px 6px' }
+          }, curCpu > 80 ? 'CPU高压' : '运算平稳')
+        ),
+        React.createElement('div', { style: { fontSize: 24, fontWeight: 700, color: curCpu > 80 ? '#ef4444' : '#0f172a', marginTop: 4 } },
+          curCpu,
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 2 } }, '%')
+        ),
+        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4 } },
+          curCpu > 80 ? '⚠️ 整机运算负荷过重' : '✓ 宿主机 CPU 资源充裕'
+        )
+      ),
+
+      React.createElement('div', { className: 'dashboard-kpi-card' },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '💾 物理内存负载'),
+          React.createElement('span', {
+            className: 'badge ' + (curMem > 80 ? 'red' : 'green'),
+            style: { fontSize: 10, padding: '1px 6px' }
+          }, curMem > 80 ? '内存吃紧' : '容量充足')
+        ),
+        React.createElement('div', { style: { fontSize: 24, fontWeight: 700, color: curMem > 80 ? '#ef4444' : '#0f172a', marginTop: 4 } },
+          curMem,
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 2 } }, '%')
+        ),
+        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4 } },
+          totalMemBytes > 0 ? `已用 ${formatGbOrMb(usedMemBytes)} / 总量 ${formatGbOrMb(totalMemBytes)}` : '动态采集物理内存'
+        )
+      ),
+
+      React.createElement('div', { className: 'dashboard-kpi-card' },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🚀 今日巡检吞吐'),
+          React.createElement('span', {
+            className: 'badge ' + (probeSuccessRate >= 95 ? 'green' : 'red'),
+            style: { fontSize: 10, padding: '1px 6px' }
+          }, `成功率 ${probeSuccessRate}%`)
+        ),
+        React.createElement('div', { style: { fontSize: 24, fontWeight: 700, color: '#0f172a', marginTop: 4 } },
+          todayProbeCalls,
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 4 } }, '次')
+        ),
+        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4 } },
+          `持续高频保活 · 成功率 ${probeSuccessRate}%`
+        )
+      ),
+
+      React.createElement('div', { className: 'dashboard-kpi-card' },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🐢 异常事件与告警'),
+          React.createElement('span', {
+            className: 'badge ' + (unackedAlerts > 0 ? 'red' : 'green'),
+            style: { fontSize: 10, padding: '1px 6px' }
+          }, unackedAlerts > 0 ? `${unackedAlerts} 条待确认` : '告警已恢复')
+        ),
+        React.createElement('div', { style: { fontSize: 24, fontWeight: 700, color: unackedAlerts > 0 ? '#ef4444' : '#10b981', marginTop: 4 } },
+          todaySlowSqls,
+          React.createElement('span', { style: { fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 4 } }, `笔慢SQL / ${unackedAlerts} 告警`)
+        ),
+        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4 } },
+          unackedAlerts > 0 ? '⚠️ 存在未确认系统告警需处理' : '✓ 系统暂无未确认隐患'
+        )
+      )
+    ),
+
+    React.createElement('div', { className: 'dashboard-chart-grid' },
+      React.createElement('div', { className: 'dashboard-chart-box' },
+        React.createElement('div', { className: 'dashboard-chart-header' },
+          React.createElement('div', { className: 'dashboard-chart-title' },
+            React.createElement('span', {}, '📈'),
+            '整机与应用 CPU 历史走势'
+          ),
+          React.createElement('div', { className: 'dashboard-chart-legend' },
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#0284c7' } }),
+              '整机系统 CPU'
+            ),
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#10b981' } }),
+              'Java 进程 CPU'
+            )
+          )
+        ),
+        React.createElement(SvgTrendChart, {
+          timeline,
+          unit: '%',
+          height: 220,
+          series: [
+            { name: '整机系统 CPU', color: '#0284c7', fill: true, data: cpuTrend?.systemCpu || [] },
+            { name: 'Java 业务 CPU', color: '#10b981', fill: false, data: cpuTrend?.processCpu || [] }
+          ]
+        })
+      ),
+
+      React.createElement('div', { className: 'dashboard-chart-box' },
+        React.createElement('div', { className: 'dashboard-chart-header' },
+          React.createElement('div', { className: 'dashboard-chart-title' },
+            React.createElement('span', {}, '💾'),
+            '物理内存占用与外部进程走势',
+            React.createElement('span', {
+              style: { fontSize: 11, color: '#ea580c', background: '#ffedd5', padding: '1px 6px', borderRadius: 4, marginLeft: 6, fontWeight: 500 }
+            }, '🔥 穿透同机 Python / ES')
+          ),
+          React.createElement('div', { className: 'dashboard-chart-legend' },
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#8b5cf6' } }),
+              '整机内存率 (%)'
+            ),
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#ea580c' } }),
+              '外部进程 (GB)'
+            ),
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#06b6d4' } }),
+              'JVM 进程 (GB)'
+            )
+          )
+        ),
+        React.createElement(SvgTrendChart, {
+          timeline,
+          unit: '',
+          height: 220,
+          series: [
+            { name: '整机内存率', color: '#8b5cf6', fill: true, unit: '%', data: memTrend?.memPercent || [] },
+            { name: '外部进程(Python/ES等)', color: '#ea580c', fill: false, unit: ' GB', data: memTrend?.externalUsedGb || [] },
+            { name: 'JVM 业务内存', color: '#06b6d4', fill: false, unit: ' GB', data: memTrend?.jvmUsedGb || [] }
+          ]
+        })
+      ),
+
+      React.createElement('div', { className: 'dashboard-chart-box' },
+        React.createElement('div', { className: 'dashboard-chart-header' },
+          React.createElement('div', { className: 'dashboard-chart-title' },
+            React.createElement('span', {}, '🚀'),
+            '业务接口巡检与错误频次走势'
+          ),
+          React.createElement('div', { className: 'dashboard-chart-legend' },
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#3b82f6' } }),
+              '巡检调用量 (次/分)'
+            ),
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#ef4444' } }),
+              '异常失败量 (次/分)'
+            )
+          )
+        ),
+        React.createElement(SvgTrendChart, {
+          timeline,
+          unit: ' 次',
+          height: 220,
+          series: [
+            { name: '巡检调用量', color: '#3b82f6', fill: true, unit: ' 次', data: probeTrend?.totalCalls || [] },
+            { name: '异常失败量', color: '#ef4444', fill: false, unit: ' 次', data: probeTrend?.errorCalls || [] }
+          ]
+        })
+      ),
+
+      React.createElement('div', { className: 'dashboard-chart-box' },
+        React.createElement('div', { className: 'dashboard-chart-header' },
+          React.createElement('div', { className: 'dashboard-chart-title' },
+            React.createElement('span', {}, '🐢'),
+            '慢 SQL 笔数与告警事件分布'
+          ),
+          React.createElement('div', { className: 'dashboard-chart-legend' },
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: '#f59e0b' } }),
+              '慢 SQL 笔数'
+            ),
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { style: { display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: '#ef4444' } }),
+              '告警触发次数'
+            )
+          )
+        ),
+        React.createElement(SvgBarChart, {
+          timeline,
+          height: 220,
+          series: [
+            { name: '慢 SQL 笔数', color: '#f59e0b', data: incidentTrend?.slowSqlCounts || [] },
+            { name: '告警触发次数', color: '#ef4444', data: incidentTrend?.alertCounts || [] }
+          ]
+        })
+      )
+    )
+  );
+}
+
 // ====== 主机性能与容量（分组折叠版） ======
-function HostSystemTab({ isViewer }) {
+function HostSystemTab({ isViewer, onOpenProcessRca }) {
   const [hosts, setHosts] = useState([]);
   const [searchText, setSearchText] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState({});
@@ -1022,21 +2118,28 @@ function HostSystemTab({ isViewer }) {
       React.createElement('td', {}, Math.floor((h.uptimeSeconds || 0) / 3600) + '小时'),
       React.createElement('td', {}, dayjs(h.createdAt).format('MM-DD HH:mm:ss')),
       React.createElement('td', {style:{whiteSpace:'nowrap'}},
-        isViewer
-          ? React.createElement('span', {className:'badge gray'}, '🔒 只读')
-          : React.createElement('div', {style:{display:'inline-flex',gap:6}},
-              React.createElement('button', {
-                className: 'btn small',
-                style: { padding: '2px 8px', fontSize: 11 },
-                title: '配置该主机的个性化告警阈值',
-                onClick: () => handleEditHostConfig(h)
-              }, '⚙️ 阈值'),
-              React.createElement('button', {
-                className: 'btn small',
-                style: { color: '#ff4d4f', padding: '2px 8px', fontSize: 11 },
-                title: '精准移除此节点（如本地开发机或废弃节点）',
-                onClick: () => handleRemoveHost(h)
-              }, '🗑️ 移除')))
+        React.createElement('div', {style:{display:'inline-flex',gap:6}},
+          React.createElement('button', {
+            className: 'btn small',
+            style: { padding: '2px 8px', fontSize: 11, color: '#0284c7', borderColor: '#bae0ff', background: '#e6f7ff' },
+            title: '穿透排查该主机全机所有进程能耗 (Python/ES/Java等)',
+            onClick: () => onOpenProcessRca && onOpenProcessRca(h.hostName)
+          }, '⚡ 进程剖析'),
+          isViewer
+            ? React.createElement('span', {className:'badge gray'}, '🔒 只读')
+            : React.createElement(React.Fragment, null,
+                React.createElement('button', {
+                  className: 'btn small',
+                  style: { padding: '2px 8px', fontSize: 11 },
+                  title: '配置该主机的个性化告警阈值',
+                  onClick: () => handleEditHostConfig(h)
+                }, '⚙️ 阈值'),
+                React.createElement('button', {
+                  className: 'btn small',
+                  style: { color: '#ff4d4f', padding: '2px 8px', fontSize: 11 },
+                  title: '精准移除此节点（如本地开发机或废弃节点）',
+                  onClick: () => handleRemoveHost(h)
+                }, '🗑️ 移除'))))
     );
   };
 
@@ -1076,6 +2179,12 @@ function HostSystemTab({ isViewer }) {
         }),
         React.createElement('button', {className:'btn small', onClick:expandAll, title:'展开所有分组'}, '📂 全部展开'),
         React.createElement('button', {className:'btn small', onClick:collapseAll, title:'收缩所有分组'}, '📁 全部收起'),
+        React.createElement('button', {
+          className:'btn small',
+          style: { background: 'linear-gradient(135deg, #0284c7, #2563eb)', color: '#fff', borderColor: '#1d4ed8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 },
+          onClick: () => onOpenProcessRca && onOpenProcessRca('ALL'),
+          title: '穿透排查全机所有操作系统进程与内存/CPU暴涨根因'
+        }, '⚡ 全机进程与暴涨诊断'),
         !isViewer && React.createElement('button', {className:'btn small danger', onClick:handleCleanTestData, title:'一键清空所有机器的历史指标、告警与流水数据'}, '🧹 清空测试数据'),
         React.createElement('button', {className:'btn small', onClick:load}, '🔄 刷新')
       )
@@ -3751,7 +4860,9 @@ function HelpGuideModal({ visible, onClose }) {
 
 function App() {
   const isViewer = (localStorage.getItem('LP_ROLE') || 'ADMIN').toUpperCase() === 'VIEWER';
-  const [tab, setTab] = useState('host-system');
+  const [tab, setTab] = useState('dashboard');
+  const [showRcaModal, setShowRcaModal] = useState(false);
+  const [rcaHostName, setRcaHostName] = useState('ALL');
   const [apps, setApps] = useState([]);
   const [currentApp, setCurrentApp] = useState(null);
   const [dashData, setDashData] = useState({});
@@ -3805,6 +4916,7 @@ function App() {
   }, [tab]);
 
   const TAB_MAP = {
+    'dashboard': '📊 全景监控大屏',
     'host-system': '🖥️ 主机性能与容量',
     'probes': '⚡ 业务巡检与探活',
     'slow-sql': '🐢 慢 SQL 分析',
@@ -3864,7 +4976,14 @@ function App() {
             key:k, className:'tab'+(tab===k?' active':''),
             onClick:()=>{setTab(k)}
           }, v))),
-      tab === 'host-system' && React.createElement(HostSystemTab, { isViewer })
+      tab === 'dashboard' && React.createElement(DashboardTab, {
+        isViewer,
+        onOpenProcessRca: (h) => { setRcaHostName(h || 'ALL'); setShowRcaModal(true); }
+      })
+      || tab === 'host-system' && React.createElement(HostSystemTab, {
+        isViewer,
+        onOpenProcessRca: (h) => { setRcaHostName(h || 'ALL'); setShowRcaModal(true); }
+      })
       || tab === 'probes' && React.createElement(ProbesTab, { isViewer })
       || tab === 'slow-sql' && React.createElement(SlowSqlTab)
       || tab === 'logs' && React.createElement(LogsTab, { isViewer })
@@ -3875,6 +4994,11 @@ function App() {
         isViewer
       })
     ),
+    React.createElement(ProcessRcaModal, {
+      visible: showRcaModal,
+      hostName: rcaHostName,
+      onClose: () => setShowRcaModal(false)
+    }),
     React.createElement(SetupWizardModal, {
       visible: showSetupModal,
       currentStatus: setupStatus,

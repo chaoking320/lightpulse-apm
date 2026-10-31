@@ -31,4 +31,12 @@ public interface ApmSystemMetricRepo extends BaseMapper<ApmSystemMetric> {
         ORDER BY created_at ASC
     """)
     List<ApmSystemMetric> selectRecentMetrics(@Param("hostName") String hostName, @Param("minutes") int minutes);
+
+    /** 获取全集群在最近 N 分钟内的历史指标数据 */
+    @Select("""
+        SELECT * FROM apm_system_metric
+        WHERE created_at >= DATE_SUB(NOW(), INTERVAL #{minutes} MINUTE)
+        ORDER BY created_at ASC
+    """)
+    List<ApmSystemMetric> selectRecentMetricsForCluster(@Param("minutes") int minutes);
 }
