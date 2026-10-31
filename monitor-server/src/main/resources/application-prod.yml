@@ -1,0 +1,152 @@
+# ============================================================
+# LightPulse APM 生产环境配置
+# 使用方式: java -jar monitor-server.jar --spring.profiles.active=prod
+# ============================================================
+
+server:
+  port: 8086
+  # 生产环境性能优化
+  tomcat:
+    threads:
+      max: 200                        # 最大工作线程
+      min-spare: 20                   # 最小空闲线程
+    max-connections: 10000            # 最大连接数
+    accept-count: 100                 # 最大等待队列
+    connection-timeout: 20000         # 连接超时 20秒
+  # 压缩配置
+  compression:
+    enabled: true
+    mime-types: text/html,text/xml,text/plain,text/css,text/javascript,application/javascript,application/json,application/xml
+    min-response-size: 1024
+
+spring:
+  application:
+    name: monitor-server
+    
+  # 生产环境数据库配置 (MySQL)
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:monitor_db}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${MYSQL_USER:lightpulse}
+    password: ${MYSQL_PASSWORD:}
+    
+    # HikariCP 生产环境优化配置
+    hikari:
+      # 连接池大小 (推荐: CPU核心数 x 2 + 磁盘数)
+      minimum-idle: 20
+      maximum-pool-size: 100
+      
+      # 连接超时配置
+      connection-timeout: 30000       # 30秒
+      idle-timeout: 600000            # 10分钟
+      max-lifetime: 1800000           # 30分钟
+      
+      # 性能优化
+      auto-commit: true
+      connection-test-query: SELECT 1
+      pool-name: LightPulseHikariCP-Prod
+      
+      # 连接泄漏检测
+      leak-detection-threshold: 60000
+      
+      # MySQL PreparedStatement 缓存优化
+      data-source-properties:
+        cachePrepStmts: true
+        prepStmtCacheSize: 500        # 缓存 500 个 PreparedStatement
+        prepStmtCacheSqlLimit: 2048   # 单个 SQL 最大长度 2KB
+        useServerPrepStmts: true      # 启用服务端 PreparedStatement
+        useLocalSessionState: true    # 使用本地会话状态
+        rewriteBatchedStatements: true # 批量操作重写
+        cacheResultSetMetadata: true  # 缓存结果集元数据
+        cacheServerConfiguration: true # 缓存服务器配置
+        elideSetAutoCommits: true     # 优化 autocommit
+        maintainTimeStats: false      # 关闭时间统计（提升性能）
+        
+  # Flyway 数据库迁移
+  flyway:
+    enabled: true
+    locations: classpath:db/migration/mysql
+    baseline-on-migrate: true
+    validate-on-migrate: true
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    # 生产环境关闭 SQL 日志
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    banner: false
+    db-config:
+      # 逻辑删除配置
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.monitor: INFO
+    com.baomidou.mybatisplus: WARN
+    org.mybatis: WARN
+    com.zaxxer.hikari: INFO           # HikariCP 日志
+  file:
+    name: /var/log/lightpulse/server.log
+  logback:
+    rollingpolicy:
+      max-file-size: 100MB            # 单文件 100MB
+      max-history: 30                 # 保留 30 天
+      total-size-cap: 10GB            # 总容量 10GB
+  # 日志格式
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# LightPulse 监控系统配置
+monitor:
+  # VictoriaMetrics 时序数据库
+  victoriametrics:
+    enabled: ${VM_ENABLED:true}
+    url: ${VM_URL:http://victoriametrics:8428}
+    batch-size: 1000                  # 批量写入大小
+    flush-interval: 3000              # 刷新间隔 3秒
+    
+  # 告警配置
+  alert:
+    enabled: true
+    webhook: ${ALERT_WEBHOOK:}        # 告警 Webhook 地址
+    channels:
+      - wechat                        # 企业微信
+      - dingtalk                      # 钉钉
+      - feishu                        # 飞书
+    
+  # Elasticsearch 配置
+  elasticsearch:
+    enabled: ${ES_ENABLED:true}
+    hosts: ${ES_HOSTS:http://elasticsearch:9200}
+    username: ${ES_USERNAME:}
+    password: ${ES_PASSWORD:}
+    
+  # 数据保留策略
+  retention:
+    metrics: 30d                      # 指标保留 30 天
+    traces: 7d                        # 链路保留 7 天
+    logs: 15d                         # 日志保留 15 天
+
+# Actuator 监控端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+      env: production
