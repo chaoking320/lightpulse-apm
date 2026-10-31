@@ -43,8 +43,45 @@ if [ -n "$PORT_PID" ]; then
     sleep 1
 fi
 
-# JVM 参数配置（512MB~1GB 内存，G1GC，时区 Asia/Shanghai，headless图形验证码支持）
-JAVA_OPTS="-Xms256m -Xmx512m -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=./logs/oom.hprof -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai -Djava.awt.headless=true"
+# ============================================================
+# JVM 性能调优参数（生产环境优化配置）
+# ============================================================
+# 内存配置: 512MB~1GB (生产环境建议 2GB-4GB)
+HEAP_SIZE="${HEAP_SIZE:-1024m}"
+JAVA_OPTS="-Xms512m -Xmx${HEAP_SIZE}"
+
+# G1 垃圾收集器优化配置
+JAVA_OPTS="$JAVA_OPTS -XX:+UseG1GC"                      # 使用 G1GC (低延迟)
+JAVA_OPTS="$JAVA_OPTS -XX:MaxGCPauseMillis=50"          # 目标 GC 暂停时间 50ms
+JAVA_OPTS="$JAVA_OPTS -XX:G1HeapRegionSize=4m"          # G1 Region 大小 4MB
+JAVA_OPTS="$JAVA_OPTS -XX:InitiatingHeapOccupancyPercent=45"  # 堆占用 45% 触发并发标记
+JAVA_OPTS="$JAVA_OPTS -XX:G1ReservePercent=10"          # 预留 10% 堆空间
+JAVA_OPTS="$JAVA_OPTS -XX:ParallelGCThreads=4"          # 并行 GC 线程数
+JAVA_OPTS="$JAVA_OPTS -XX:ConcGCThreads=1"              # 并发 GC 线程数
+
+# GC 日志配置（便于性能分析）
+JAVA_OPTS="$JAVA_OPTS -Xlog:gc*:file=./logs/gc-%t.log:time,level,tags:filecount=5,filesize=10M"
+
+# JIT 编译器优化
+JAVA_OPTS="$JAVA_OPTS -XX:+TieredCompilation"           # 启用分层编译
+JAVA_OPTS="$JAVA_OPTS -XX:CompileThreshold=1500"        # 降低编译阈值，更快触发 JIT
+
+# OOM 处理
+JAVA_OPTS="$JAVA_OPTS -XX:+HeapDumpOnOutOfMemoryError"  # OOM 时生成堆转储
+JAVA_OPTS="$JAVA_OPTS -XX:HeapDumpPath=./logs/oom-$(date +%Y%m%d-%H%M%S).hprof"
+JAVA_OPTS="$JAVA_OPTS -XX:+ExitOnOutOfMemoryError"      # OOM 时自动退出（便于监控重启）
+
+# 性能监控与诊断
+JAVA_OPTS="$JAVA_OPTS -XX:+UnlockDiagnosticVMOptions"   # 解锁诊断选项
+JAVA_OPTS="$JAVA_OPTS -XX:+PrintFlagsFinal"             # 打印最终 JVM 参数
+
+# 字符编码与时区
+JAVA_OPTS="$JAVA_OPTS -Dfile.encoding=UTF-8"
+JAVA_OPTS="$JAVA_OPTS -Duser.timezone=Asia/Shanghai"
+JAVA_OPTS="$JAVA_OPTS -Djava.awt.headless=true"         # Headless 模式（验证码支持）
+
+# 网络优化
+JAVA_OPTS="$JAVA_OPTS -Djava.net.preferIPv4Stack=true"  # 优先使用 IPv4
 
 # 优先定位 JDK 17
 if [ -d "$SERVER_DIR/jdk17" ]; then

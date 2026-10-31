@@ -24,8 +24,17 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 echo "🚀 正在启动 LightPulse Monitor Agent..."
-# 探针极度轻量，16m~64m 内存即可稳定运行
-nohup java -Xms16m -Xmx64m -jar "$JAR_NAME" -c "$CONFIG_FILE" > "$LOG_FILE" 2>&1 &
+
+# ============================================================
+# Agent JVM 优化参数（轻量级进程）
+# ============================================================
+AGENT_OPTS="-Xms32m -Xmx128m"                            # 内存 32MB~128MB
+AGENT_OPTS="$AGENT_OPTS -XX:+UseG1GC"                    # G1GC 低延迟
+AGENT_OPTS="$AGENT_OPTS -XX:MaxGCPauseMillis=20"        # 目标暂停 20ms
+AGENT_OPTS="$AGENT_OPTS -XX:+UseStringDeduplication"    # 字符串去重（节省内存）
+AGENT_OPTS="$AGENT_OPTS -Dfile.encoding=UTF-8"
+
+nohup java $AGENT_OPTS -jar "$JAR_NAME" -c "$CONFIG_FILE" > "$LOG_FILE" 2>&1 &
 
 sleep 2
 PID=$(ps -ef | grep "$JAR_NAME" | grep -v grep | awk '{print $2}')
