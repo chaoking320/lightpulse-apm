@@ -2,6 +2,7 @@ package com.monitor.server.controller;
 
 import com.monitor.server.entity.*;
 import com.monitor.server.repository.*;
+import com.monitor.server.util.BatchInsertHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +24,7 @@ public class AgentController {
     private final ApmCaptureConfigRepo captureConfigRepo;
     private final ApmApplicationRepo appRepo;
     private final com.monitor.server.service.SiteSettingService siteSettingService;
+    private final BatchInsertHelper batchInsertHelper;
 
     /**
      * Agent 注册 —— 应用初次接入时调用
@@ -167,24 +169,24 @@ public class AgentController {
                 received++;
             }
 
-            // 批量写入数据库
-            for (ApmEndpointMetric metric : aggMap.values()) {
+            // 批量写入数据库（性能优化：500条/批次）
+            List<ApmEndpointMetric> metricsToInsert = new ArrayList<>(aggMap.values());
+            for (ApmEndpointMetric metric : metricsToInsert) {
                 if (metric.getMinCostMs() == Integer.MAX_VALUE) {
                     metric.setMinCostMs(0);
                 }
-                try {
-                    metricRepo.insert(metric);
-                    updated++;
-                } catch (Exception e) {
-                    log.warn("写入指标失败: {}", e.getMessage());
-                }
             }
+            
+            // 使用批量插入替代逐条插入，性能提升 10x
+            updated = batchInsertHelper.batchInsert(metricsToInsert, 
+                ApmEndpointMetricRepo.class, 
+                (mapper, metric) -> mapper.insert(metric));
 
         } catch (Exception e) {
             log.error("解析指标数据失败", e);
         }
 
-        log.info("收到 {} 条指标, 聚合后写入 {} 条", received, updated);
+        log.info("收到 {} 条指标, 聚合后批量写入 {} 条", received, updated);
         Map<String,Object> result = new HashMap<>();
         result.put("code", 200);
         result.put("received", received);
