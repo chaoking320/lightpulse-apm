@@ -36,6 +36,7 @@ public class AuthService {
 
     private final ObjectMapper objectMapper;
     private final ApmUserRepo userRepo;
+    private final PasswordService passwordService;
 
     @Getter
     private AuthConfig authConfig = new AuthConfig();
@@ -68,7 +69,15 @@ public class AuthService {
                 // 1. 初始化默认/配置中的 admin
                 ApmUser admin = new ApmUser();
                 admin.setUsername(authConfig.getAdminUsername() != null ? authConfig.getAdminUsername().trim() : "admin");
-                admin.setPasswordHash(authConfig.getAdminPasswordHash() != null ? authConfig.getAdminPasswordHash() : sha256("admin123"));
+                // 使用安全的 PBKDF2 加密替代 SHA-256
+                String adminPasswordHash = authConfig.getAdminPasswordHash();
+                if (adminPasswordHash != null && passwordService.needsRehash(adminPasswordHash)) {
+                    // 如果配置文件中是旧格式密码，保持兼容但记录警告
+                    admin.setPasswordHash(adminPasswordHash);
+                    log.warn("[Security] Admin 密码使用旧格式，建议首次登录后修改密码以升级加密算法");
+                } else {
+                    admin.setPasswordHash(adminPasswordHash != null ? adminPasswordHash : passwordService.hashPassword("admin123"));
+                }
                 admin.setRole(ROLE_ADMIN);
                 admin.setStatus(1);
                 admin.setRemark("超级管理员 (系统内置)");
@@ -80,7 +89,14 @@ public class AuthService {
                 if (authConfig.isViewerEnabled()) {
                     ApmUser viewer = new ApmUser();
                     viewer.setUsername(authConfig.getViewerUsername() != null ? authConfig.getViewerUsername().trim() : "viewer");
-                    viewer.setPasswordHash(authConfig.getViewerPasswordHash() != null ? authConfig.getViewerPasswordHash() : sha256("viewer123"));
+                    // 使用安全的 PBKDF2 加密
+                    String viewerPasswordHash = authConfig.getViewerPasswordHash();
+                    if (viewerPasswordHash != null && passwordService.needsRehash(viewerPasswordHash)) {
+                        viewer.setPasswordHash(viewerPasswordHash);
+                        log.warn("[Security] Viewer 密码使用旧格式，建议首次登录后修改密码以升级加密算法");
+                    } else {
+                        viewer.setPasswordHash(viewerPasswordHash != null ? viewerPasswordHash : passwordService.hashPassword("viewer123"));
+                    }
                     viewer.setRole(ROLE_VIEWER);
                     viewer.setStatus(1);
                     viewer.setRemark("只读观察员 (系统内置)");
@@ -162,6 +178,19 @@ public class AuthService {
                     activeTokens.put(token, System.currentTimeMillis() + TOKEN_TTL_MS);
                     tokenRoles.put(token, user.getRole() != null ? user.getRole().toUpperCase() : ROLE_VIEWER);
                     tokenUsers.put(token, user.getUsername());
+                    
+                    // 自动升级旧密码格式
+                    if (passwordService.needsRehash(user.getPasswordHash())) {
+                        try {
+                            user.setPasswordHash(passwordService.hashPassword(password));
+                            user.setUpdatedAt(LocalDateTime.now());
+                            userRepo.updateById(user);
+                            log.info("[Security] 用户 [{}] 密码已自动升级为 PBKDF2 加密", trimmedUser);
+                        } catch (Exception e) {
+                            log.warn("[Security] 用户 [{}] 密码自动升级失败: {}", trimmedUser, e.getMessage());
+                        }
+                    }
+                    
                     log.info("[Auth] 用户 [{}] 登录成功，分配角色: {}", trimmedUser, user.getRole());
                     return token;
                 }
@@ -203,10 +232,8 @@ public class AuthService {
 
     private boolean matchPassword(String rawPassword, String storedHash) {
         if (rawPassword == null || storedHash == null) return false;
-        if (rawPassword.equals(storedHash)) {
-            return true;
-        }
-        return sha256(rawPassword).equalsIgnoreCase(storedHash);
+        // 使用 PasswordService 进行安全验证（自动兼容 SHA-256 旧密码）
+        return passwordService.verifyPassword(rawPassword, storedHash);
     }
 
     public String getRole(String token) {
@@ -252,9 +279,9 @@ public class AuthService {
     }
 
     public synchronized boolean changePassword(String username, String oldPassword, String newPassword) {
-        if (newPassword == null || newPassword.trim().length() < 5) {
-            throw new IllegalArgumentException("新密码长度不能少于 5 位");
-        }
+        // 验证新密码强度
+        passwordService.validatePasswordStrength(newPassword);
+        
         if (username == null) return false;
         String trimmedUser = username.trim();
         String token = login(trimmedUser, oldPassword);
@@ -262,7 +289,7 @@ public class AuthService {
             return false;
         }
 
-        String newHash = sha256(newPassword.trim());
+        String newHash = passwordService.hashPassword(newPassword.trim());
 
         // 同步更新数据库
         try {
@@ -286,7 +313,7 @@ public class AuthService {
         activeTokens.clear();
         tokenRoles.clear();
         tokenUsers.clear();
-        log.info("[Auth] 用户 [{}] 密码已修改，所有在线会话已失效", trimmedUser);
+        log.info("[Auth] 用户 [{}] 密码已修改（使用 PBKDF2 加密），所有在线会话已失效", trimmedUser);
         return true;
     }
 
@@ -307,9 +334,8 @@ public class AuthService {
         if (user.getUsername() == null || user.getUsername().trim().isEmpty()) {
             throw new IllegalArgumentException("用户名不能为空");
         }
-        if (rawPassword == null || rawPassword.trim().length() < 5) {
-            throw new IllegalArgumentException("密码长度不能少于 5 位");
-        }
+        // 验证密码强度
+        passwordService.validatePasswordStrength(rawPassword);
 
         String uname = user.getUsername().trim();
         Long exists = userRepo.selectCount(new LambdaQueryWrapper<ApmUser>().eq(ApmUser::getUsername, uname));
@@ -318,7 +344,7 @@ public class AuthService {
         }
 
         user.setUsername(uname);
-        user.setPasswordHash(sha256(rawPassword.trim()));
+        user.setPasswordHash(passwordService.hashPassword(rawPassword.trim()));
         user.setRole((user.getRole() != null && !user.getRole().isBlank()) ? user.getRole().toUpperCase() : ROLE_VIEWER);
         user.setStatus(user.getStatus() != null ? user.getStatus() : 1);
         user.setCreatedAt(LocalDateTime.now());
@@ -356,10 +382,9 @@ public class AuthService {
             user.setRemark(remark);
         }
         if (newPassword != null && !newPassword.isBlank()) {
-            if (newPassword.trim().length() < 5) {
-                throw new IllegalArgumentException("新密码长度不能少于 5 位");
-            }
-            user.setPasswordHash(sha256(newPassword.trim()));
+            // 验证密码强度
+            passwordService.validatePasswordStrength(newPassword);
+            user.setPasswordHash(passwordService.hashPassword(newPassword.trim()));
             // 若修改了密码，强制其当前在线 token 失效
             tokenUsers.forEach((tok, u) -> {
                 if (user.getUsername().equalsIgnoreCase(u)) {
@@ -420,6 +445,10 @@ public class AuthService {
         return UUID.randomUUID().toString().replace("-", "");
     }
 
+    /**
+     * @deprecated 已废弃，仅用于向后兼容旧密码验证，请使用 PasswordService
+     */
+    @Deprecated
     public static String sha256(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
