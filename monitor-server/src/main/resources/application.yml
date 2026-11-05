@@ -59,6 +59,55 @@ logging:
       max-history: 7
       total-size-cap: 300MB
 
+# Spring Boot Actuator 监控端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,threaddump,heapdump
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+        step: 10s  # 采集间隔
+    tags:
+      application: ${spring.application.name}
+      env: dev
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+    enable:
+      jvm: true
+      system: true
+      tomcat: true
+      jdbc: true
+  info:
+    env:
+      enabled: true
+    java:
+      enabled: true
+    os:
+      enabled: true
+
+# 应用信息
+info:
+  app:
+    name: LightPulse APM Monitor Server
+    version: 0.0.9
+    description: 高性能 APM 监控中心
+    
 # LightPulse 监控系统配置
 monitor:
   victoriametrics:

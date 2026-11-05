@@ -25,6 +25,7 @@ public class AgentController {
     private final ApmApplicationRepo appRepo;
     private final com.monitor.server.service.SiteSettingService siteSettingService;
     private final BatchInsertHelper batchInsertHelper;
+    private final com.monitor.server.metrics.CustomMetricsCollector metricsCollector;
 
     /**
      * Agent 注册 —— 应用初次接入时调用
@@ -111,8 +112,10 @@ public class AgentController {
      */
     @PostMapping("/metrics")
     public Map<String,Object> receiveMetrics(@RequestBody Map<String,Object> body) {
+        long startTime = System.currentTimeMillis();
         int received = 0;
         int updated = 0;
+        String appName = "unknown";
 
         try {
             @SuppressWarnings("unchecked")
@@ -128,7 +131,7 @@ public class AgentController {
             Map<String, ApmEndpointMetric> aggMap = new LinkedHashMap<>();
 
             for (Map<String,Object> m : metrics) {
-                String appName = str(m.get("appName"));
+                appName = str(m.get("appName"));
                 String className = str(m.get("className"));
                 String methodName = str(m.get("methodName"));
                 long timestamp = m.get("timestamp") instanceof Number
@@ -182,6 +185,11 @@ public class AgentController {
             updated = batchInsertHelper.batchInsert(metricsToInsert, 
                 ApmEndpointMetricRepo.class, 
                 (mapper, metric) -> mapper.insert(metric));
+            
+            // 记录 Prometheus 指标
+            long processingTime = System.currentTimeMillis() - startTime;
+            metricsCollector.recordMetricsReceived(received, appName);
+            metricsCollector.recordMetricsProcessingTime(processingTime, appName);
 
         } catch (Exception e) {
             log.error("解析指标数据失败", e);
