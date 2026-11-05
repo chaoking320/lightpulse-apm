@@ -1,0 +1,127 @@
+# Prometheus 告警规则
+# LightPulse APM 监控告警
+
+groups:
+  - name: lightpulse_server_alerts
+    interval: 30s
+    rules:
+      # 服务健康检查
+      - alert: ServerDown
+        expr: up{job="lightpulse-server"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: lightpulse-server
+        annotations:
+          summary: "LightPulse Server 服务宕机"
+          description: "{{ $labels.instance }} 已宕机超过 1 分钟"
+      
+      # CPU 使用率告警
+      - alert: HighCpuUsage
+        expr: system_cpu_usage{job="lightpulse-server"} > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: lightpulse-server
+        annotations:
+          summary: "CPU 使用率过高"
+          description: "{{ $labels.instance }} CPU 使用率超过 80%，当前值: {{ $value | humanizePercentage }}"
+      
+      # 内存使用率告警
+      - alert: HighMemoryUsage
+        expr: jvm_memory_used_bytes{job="lightpulse-server",area="heap"} / jvm_memory_max_bytes{area="heap"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: lightpulse-server
+        annotations:
+          summary: "JVM 堆内存使用率过高"
+          description: "{{ $labels.instance }} 堆内存使用率超过 85%，当前值: {{ $value | humanizePercentage }}"
+      
+      # GC 暂停时间告警
+      - alert: HighGcPauseTime
+        expr: rate(jvm_gc_pause_seconds_sum{job="lightpulse-server"}[5m]) / rate(jvm_gc_pause_seconds_count[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          service: lightpulse-server
+        annotations:
+          summary: "GC 暂停时间过长"
+          description: "{{ $labels.instance }} 平均 GC 暂停时间超过 100ms"
+      
+      # 数据库连接池告警
+      - alert: HighDatabaseConnectionUsage
+        expr: hikaricp_connections_active{job="lightpulse-server"} / hikaricp_connections_max > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          service: lightpulse-server
+        annotations:
+          summary: "数据库连接池使用率过高"
+          description: "{{ $labels.instance }} 数据库连接池使用率超过 80%"
+      
+      # HTTP 错误率告警
+      - alert: HighHttpErrorRate
+        expr: rate(http_server_requests_seconds_count{job="lightpulse-server",status=~"5.."}[5m]) / rate(http_server_requests_seconds_count{job="lightpulse-server"}[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: warning
+          service: lightpulse-server
+        annotations:
+          summary: "HTTP 5xx 错误率过高"
+          description: "{{ $labels.instance }} HTTP 5xx 错误率超过 5%"
+      
+      # API 响应时间告警
+      - alert: SlowApiResponse
+        expr: histogram_quantile(0.95, rate(http_server_requests_seconds_bucket{job="lightpulse-server"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: lightpulse-server
+        annotations:
+          summary: "API 响应时间过慢"
+          description: "{{ $labels.instance }} P95 响应时间超过 2 秒"
+      
+      # Agent 心跳丢失告警
+      - alert: AgentHeartbeatLost
+        expr: rate(lightpulse_agent_heartbeat_total[5m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: lightpulse-agent
+        annotations:
+          summary: "Agent 心跳丢失"
+          description: "应用 {{ $labels.app }} 在过去 10 分钟没有心跳"
+      
+      # 批量插入性能下降告警
+      - alert: BatchInsertPerformanceDegraded
+        expr: lightpulse_batch_insert_tps < 1000
+        for: 5m
+        labels:
+          severity: warning
+          service: lightpulse-server
+        annotations:
+          summary: "批量插入性能下降"
+          description: "{{ $labels.instance }} 批量插入 TPS 低于 1000"
+      
+      # 磁盘空间告警
+      - alert: LowDiskSpace
+        expr: disk_free_bytes{job="lightpulse-server"} / disk_total_bytes < 0.1
+        for: 5m
+        labels:
+          severity: critical
+          service: lightpulse-server
+        annotations:
+          summary: "磁盘空间不足"
+          description: "{{ $labels.instance }} 磁盘剩余空间低于 10%"
+      
+      # 线程池耗尽告警
+      - alert: ThreadPoolExhausted
+        expr: tomcat_threads_busy_threads{job="lightpulse-server"} / tomcat_threads_config_max_threads > 0.9
+        for: 3m
+        labels:
+          severity: critical
+          service: lightpulse-server
+        annotations:
+          summary: "Tomcat 线程池即将耗尽"
+          description: "{{ $labels.instance }} 线程池使用率超过 90%"

@@ -1,0 +1,45 @@
+# Prometheus 配置文件
+# 用于监控 LightPulse APM 系统
+
+global:
+  scrape_interval: 15s      # 默认采集间隔
+  evaluation_interval: 15s  # 规则评估间隔
+  external_labels:
+    cluster: 'lightpulse-apm'
+    environment: 'production'
+
+# 告警规则文件
+rule_files:
+  - 'alerts.yml'
+
+# 采集任务配置
+scrape_configs:
+  # LightPulse Monitor Server
+  - job_name: 'lightpulse-server'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['localhost:8086']
+        labels:
+          service: 'monitor-server'
+          app: 'lightpulse-apm'
+    
+  # 可选: 如果有多个 Server 实例
+  # - job_name: 'lightpulse-server-cluster'
+  #   metrics_path: '/actuator/prometheus'
+  #   static_configs:
+  #     - targets: 
+  #         - 'server1:8086'
+  #         - 'server2:8086'
+  #         - 'server3:8086'
+  
+  # Prometheus 自监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+# Alertmanager 配置
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'localhost:9093'
