@@ -27,6 +27,12 @@ public class Agent {
         // 1. 解析启动参数
         config = AgentConfig.parse(agentArgs);
 
+        // 归一化服务端地址（去掉 /apm 后缀）。以前依赖注册流程顺带修改，注册改为后台执行后需要提前处理
+        String normalizedUrl = config.getServerUrl();
+        if (normalizedUrl != null && normalizedUrl.endsWith("/apm")) {
+            config.setServerUrl(normalizedUrl.substring(0, normalizedUrl.length() - 4));
+        }
+
         // 2. 同步拉取一次服务端配置（确保 transformer 安装时就有用户定义的策略）
         try {
             ConfigFetcher.syncFetch(config);
@@ -44,13 +50,19 @@ public class Agent {
         installTransformer();
 
         // 5. 注册到服务端 + 启动心跳
-        try {
-            Registration.register(config);
-            HeartbeatManager.start(config);
-            System.out.println("[Monitor Agent] 注册+心跳已启动");
-        } catch (Exception e) {
-            System.out.println("[Monitor Agent] 注册失败: " + e.getMessage());
-        }
+        // 放到后台线程执行：注册请求有网络超时，服务端不可达时不应阻塞业务应用的启动
+        // （服务端对未注册实例的心跳会自动补注册，因此注册失败不影响后续上报）
+        Thread registerThread = new Thread(() -> {
+            try {
+                Registration.register(config);
+                HeartbeatManager.start(config);
+                System.out.println("[Monitor Agent] 注册+心跳已启动");
+            } catch (Exception e) {
+                System.out.println("[Monitor Agent] 注册失败: " + e.getMessage());
+            }
+        }, "monitor-register");
+        registerThread.setDaemon(true);
+        registerThread.start();
 
         // 6. 启动 APM 调用链上报线程
         HttpReporter.start(config);

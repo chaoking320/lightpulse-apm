@@ -24,6 +24,16 @@ public class ReportQueue {
         return accepted;
     }
 
+    /**
+     * 上报失败时把整批数据放回队列，等待下一轮重试（队列满时按既有策略丢弃最老数据，内存依然有界）
+     */
+    public static void requeue(List<Object> batch) {
+        if (batch == null) return;
+        for (Object o : batch) {
+            offer(o);
+        }
+    }
+
     public static List<Object> drain(int maxSize) {
         List<Object> batch = new ArrayList<>(Math.min(queue.size(), maxSize));
         queue.drainTo(batch, maxSize);

@@ -21,6 +21,9 @@ public class AuthInterceptor implements HandlerInterceptor {
 
     private final AuthService authService;
 
+    /** 默认 Token 告警只打印一次，避免刷屏 */
+    private final java.util.concurrent.atomic.AtomicBoolean defaultTokenWarned = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
         String uri = request.getRequestURI();
@@ -33,8 +36,18 @@ public class AuthInterceptor implements HandlerInterceptor {
         // 2. Agent 专用通道：校验 X-Agent-Token (支持未配置、默认秘钥 lp-agent-secret-token 全线免密畅通)
         if (uri.startsWith("/api/v1/agent/") || uri.startsWith("/apm/api/v1/agent/")) {
             String configuredToken = authService.getAuthConfig().getAgentSecretToken();
-            if (configuredToken == null || configuredToken.isBlank() || "lp-agent-secret-token".equals(configuredToken)) {
-                return true; // 若未配置秘钥或为默认秘钥，直接放行，无需复杂配置
+            boolean usingDefaultToken = configuredToken == null || configuredToken.isBlank() || "lp-agent-secret-token".equals(configuredToken);
+            boolean strictAgentAuth = authService.getAuthConfig().isStrictAgentAuth();
+            if (usingDefaultToken) {
+                // 若未配置秘钥或为默认秘钥，直接放行，无需复杂配置（与旧版行为一致）
+                if (defaultTokenWarned.compareAndSet(false, true)) {
+                    log.warn("[Auth] Agent 上报当前未启用鉴权（未配置自定义 agentSecretToken），任何人都可向本服务写入监控数据。"
+                            + "建议在 auth-config.json 中设置 agentSecretToken 并同步修改各 Agent 的 serverToken，再开启 strictAgentAuth。");
+                    if (strictAgentAuth) {
+                        log.warn("[Auth] strictAgentAuth=true 但尚未配置自定义 agentSecretToken，严格模式已被忽略。");
+                    }
+                }
+                return true;
             }
             String agentToken = request.getHeader("X-Agent-Token");
             if (agentToken == null || agentToken.isBlank()) {
@@ -43,7 +56,8 @@ public class AuthInterceptor implements HandlerInterceptor {
                     agentToken = authHdr.substring(7).trim();
                 }
             }
-            if (configuredToken.equals(agentToken) || "lp-agent-secret-token".equals(agentToken)) {
+            // 严格模式下不再接受默认 Token，否则自定义 Token 形同虚设
+            if (configuredToken.equals(agentToken) || (!strictAgentAuth && "lp-agent-secret-token".equals(agentToken))) {
                 return true;
             }
             log.warn("[Auth] Agent 上报被拒绝: 来源 IP={}, URI={}, 缺少或无效的 Agent Token", request.getRemoteAddr(), uri);

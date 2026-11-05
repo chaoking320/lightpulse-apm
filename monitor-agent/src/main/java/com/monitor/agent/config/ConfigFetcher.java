@@ -23,8 +23,9 @@ public class ConfigFetcher {
         String url = config.getServerUrl() + "/api/v1/agent/config/" + encodedApp;
 
         HttpURLConnection conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
-        conn.setConnectTimeout(5000);
-        conn.setReadTimeout(5000);
+        // 这里运行在 premain 中，会阻塞业务应用启动：超时从 5s 缩短到 2s，服务端不可达时不再拖慢业务启动
+        conn.setConnectTimeout(2000);
+        conn.setReadTimeout(2000);
         if (config.getServerToken() != null && !config.getServerToken().isEmpty()) {
             conn.setRequestProperty("X-Agent-Token", config.getServerToken());
             conn.setRequestProperty("Authorization", "Bearer " + config.getServerToken());
@@ -115,7 +116,7 @@ public class ConfigFetcher {
     }
 
     /** 极简 JSON 解析 —— 只解析扁平 key:value */
-    private static Map<String, Object> parseSimpleJson(String json) {
+    static Map<String, Object> parseSimpleJson(String json) {
         Map<String, Object> map = new HashMap<>();
         if (json == null || json.isEmpty()) return map;
 
@@ -147,10 +148,47 @@ public class ConfigFetcher {
             if (i >= json.length()) break;
             char c = json.charAt(i);
             if (c == '"') {
-                int valEnd = json.indexOf('"', i + 1);
-                if (valEnd < 0) break;
-                map.put(key, json.substring(i + 1, valEnd));
-                i = valEnd + 1;
+                // 转义感知的字符串解析：支持双引号、反斜杠、换行、制表符及 Unicode 转义，不会被值内部的引号截断
+                StringBuilder sbVal = new StringBuilder();
+                int p = i + 1;
+                boolean closed = false;
+                while (p < json.length()) {
+                    char ch = json.charAt(p);
+                    if (ch == '\\' && p + 1 < json.length()) {
+                        char nx = json.charAt(p + 1);
+                        p += 2;
+                        switch (nx) {
+                            case 'n': sbVal.append('\n'); break;
+                            case 'r': sbVal.append('\r'); break;
+                            case 't': sbVal.append('\t'); break;
+                            case 'b': sbVal.append('\b'); break;
+                            case 'f': sbVal.append('\f'); break;
+                            case 'u':
+                                if (p + 4 <= json.length()) {
+                                    try {
+                                        sbVal.append((char) Integer.parseInt(json.substring(p, p + 4), 16));
+                                        p += 4;
+                                    } catch (NumberFormatException e) {
+                                        sbVal.append("\\u");
+                                    }
+                                } else {
+                                    sbVal.append("\\u");
+                                }
+                                break;
+                            default: sbVal.append(nx);
+                        }
+                    } else if (ch == '"') {
+                        closed = true;
+                        p++;
+                        break;
+                    } else {
+                        sbVal.append(ch);
+                        p++;
+                    }
+                }
+                if (!closed) break;
+                map.put(key, sbVal.toString());
+                i = p;
             } else if (c == '{' || c == '[') {
                 // 跳过复杂结构
                 int depth = 0;
@@ -167,9 +205,19 @@ public class ConfigFetcher {
                 int valEnd = i;
                 while (valEnd < json.length() && json.charAt(valEnd) != ',' && json.charAt(valEnd) != '}') valEnd++;
                 String val = json.substring(i, valEnd).trim();
-                if (val.contains(".")) map.put(key, Double.parseDouble(val));
-                else if (val.equals("true") || val.equals("false")) map.put(key, Boolean.parseBoolean(val));
-                else map.put(key, Long.parseLong(val));
+                if (val.equals("null")) {
+                    // JSON null（例如服务端某个策略的 methodMatch 为空）：忽略该键，
+                    // 以前这里会走到 Long.parseLong("null") 抛异常，导致整份配置被静默丢弃
+                } else if (val.equals("true") || val.equals("false")) {
+                    map.put(key, Boolean.parseBoolean(val));
+                } else {
+                    try {
+                        if (val.contains(".") || val.contains("e") || val.contains("E")) map.put(key, Double.parseDouble(val));
+                        else map.put(key, Long.parseLong(val));
+                    } catch (NumberFormatException e) {
+                        // 单个字段无法解析不应影响其他配置项
+                    }
+                }
                 i = valEnd;
             }
 

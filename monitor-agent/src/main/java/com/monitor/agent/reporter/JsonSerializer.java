@@ -36,7 +36,9 @@ public class JsonSerializer {
                 appendStr(sb, "traceId", m.getTraceId());
                 if (m.getErrorMsg() != null) {
                     sb.append(",");
-                    appendStr(sb, "errorMsg", m.getErrorMsg());
+                    String em = m.getErrorMsg();
+                    if (em.length() > 1000) em = em.substring(0, 1000);
+                    appendStr(sb, "errorMsg", em);
                 }
                 sb.append("}");
             }
@@ -48,9 +50,40 @@ public class JsonSerializer {
     private static void appendStr(StringBuilder sb, String key, String value) {
         sb.append("\"").append(key).append("\":\"");
         if (value != null) {
-            sb.append(value.replace("\\", "\\\\").replace("\"", "\\\""));
+            sb.append(escape(value));
         }
         sb.append("\"");
+    }
+
+    /**
+     * JSON 字符串转义（RFC 8259）：反斜杠、双引号以及所有 U+0000~U+001F 控制字符。
+     * 之前只转义了 \ 和 "，errorMsg 含换行时会生成非法 JSON，导致整批上报被服务端拒绝。
+     */
+    public static String escape(String s) {
+        if (s == null) return "";
+        StringBuilder out = null;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            String rep = null;
+            switch (c) {
+                case '\\': rep = "\\\\"; break;
+                case '"':  rep = "\\\""; break;
+                case '\n': rep = "\\n"; break;
+                case '\r': rep = "\\r"; break;
+                case '\t': rep = "\\t"; break;
+                case '\b': rep = "\\b"; break;
+                case '\f': rep = "\\f"; break;
+                default:
+                    if (c < 0x20) rep = String.format("\\u%04x", (int) c);
+            }
+            if (rep != null) {
+                if (out == null) { out = new StringBuilder(s.length() + 16); out.append(s, 0, i); }
+                out.append(rep);
+            } else if (out != null) {
+                out.append(c);
+            }
+        }
+        return out == null ? s : out.toString();
     }
 
     private static void appendNum(StringBuilder sb, String key, long value) {

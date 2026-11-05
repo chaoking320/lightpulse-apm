@@ -54,9 +54,15 @@ public class Registration {
             config.setServerUrl(baseUrl);
         }
         String url = baseUrl + "/api/v1/agent/register";
-        httpPost(url, json.toString(), config.getServerToken());
+        int code = httpPost(url, json.toString(), config.getServerToken());
 
-        System.out.println("[Monitor Agent] 注册成功: " + config.getAppName() + " " + instanceId);
+        // 以前无论服务端返回什么（甚至连接失败）都会打印"注册成功"，排查问题时会被误导
+        if (code >= 200 && code < 300) {
+            System.out.println("[Monitor Agent] 注册成功: " + config.getAppName() + " " + instanceId);
+        } else {
+            System.out.println("[Monitor Agent] 注册未成功 (HTTP " + code + ")，将由心跳自动补注册: "
+                    + config.getAppName() + " " + instanceId);
+        }
     }
 
     public static String getInstanceId() {

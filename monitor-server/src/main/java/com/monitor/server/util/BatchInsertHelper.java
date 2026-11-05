@@ -56,20 +56,30 @@ public class BatchInsertHelper {
         try (SqlSession session = sqlSessionFactory.openSession(ExecutorType.BATCH, false)) {
             M mapper = session.getMapper(mapperClass);
             
+            int chunkQueued = 0;
             for (int i = 0; i < totalSize; i++) {
                 T entity = entities.get(i);
                 
                 try {
                     consumer.accept(mapper, entity);
-                    totalSuccess++;
+                    chunkQueued++;
                 } catch (Exception e) {
                     log.warn("[BatchInsert] 插入第 {} 条记录失败: {}", i + 1, e.getMessage());
                 }
                 
                 // 达到批次大小或最后一条记录时提交
                 if ((i + 1) % batchSize == 0 || i == totalSize - 1) {
-                    session.commit();
+                    // BATCH 执行器下语句在 commit/flush 时才真正发往数据库，
+                    // 因此失败只会在这里暴露；之前在入队时就计为成功，失败时 totalSuccess 会虚高
+                    try {
+                        session.commit();
+                        totalSuccess += chunkQueued;
+                    } catch (Exception e) {
+                        session.rollback();
+                        log.error("[BatchInsert] 批次提交失败，本批 {} 条已回滚: {}", chunkQueued, e.getMessage());
+                    }
                     session.clearCache();
+                    chunkQueued = 0;
                 }
             }
             
@@ -77,8 +87,9 @@ public class BatchInsertHelper {
             double successRate = totalSize > 0 ? (totalSuccess * 100.0 / totalSize) : 0;
             long tps = costMs > 0 ? (totalSuccess * 1000L / costMs) : 0;
             
-            log.info("[BatchInsert] 批量写入完成: {}/{} 条 ({:.1f}%), 耗时: {}ms, 吞吐量: {} TPS",
-                totalSuccess, totalSize, successRate, costMs, tps);
+            // slf4j 只识别 {}，不支持 {:.1f}，之前这里的参数会整体错位
+            log.info("[BatchInsert] 批量写入完成: {}/{} 条 ({}%), 耗时: {}ms, 吞吐量: {} TPS",
+                totalSuccess, totalSize, String.format("%.1f", successRate), costMs, tps);
             
         } catch (Exception e) {
             log.error("[BatchInsert] 批量插入异常", e);

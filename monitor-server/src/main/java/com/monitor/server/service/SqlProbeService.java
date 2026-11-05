@@ -203,6 +203,7 @@ public class SqlProbeService {
             return jdbcTemplate.execute((Connection conn) -> {
                 try (Statement stmt = conn.createStatement()) {
                     stmt.setQueryTimeout(timeoutSec);
+                    stmt.setMaxRows(1); // 只取第一行第一列，不让大结果集拖慢探针
                     try (ResultSet rs = stmt.executeQuery(sql)) {
                         if (rs.next()) {
                             return rs.getObject(1);
@@ -216,7 +217,10 @@ public class SqlProbeService {
         // 外置目标 JDBC 连接
         try (Connection conn = DriverManager.getConnection(url, user != null ? user : "", pass != null ? pass : "");
              Statement stmt = conn.createStatement()) {
+            // 纵深防御：除了字符串白名单校验，再让外置连接以只读模式执行（驱动不支持时忽略）
+            try { conn.setReadOnly(true); } catch (Exception ignored) { }
             stmt.setQueryTimeout(timeoutSec);
+            stmt.setMaxRows(1); // 只取第一行第一列，不让大结果集拖慢探针
             try (ResultSet rs = stmt.executeQuery(sql)) {
                 if (rs.next()) {
                     return rs.getObject(1);

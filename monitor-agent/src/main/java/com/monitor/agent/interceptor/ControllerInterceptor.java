@@ -14,8 +14,9 @@ public class ControllerInterceptor {
     @Advice.OnMethodEnter
     public static long enter(@Advice.Origin("#t") String className,
                               @Advice.Origin("#m") String methodName) {
-        // 生成或获取 TraceID
+        // 生成或获取 TraceID，并记录嵌套深度
         TraceContext.getOrCreate();
+        TraceContext.enterMethod();
         return System.nanoTime();
     }
 
@@ -26,9 +27,13 @@ public class ControllerInterceptor {
                              @Advice.Thrown Throwable thrown) {
         long costMs = (System.nanoTime() - startNanos) / 1_000_000;
 
-        // 采样率判断
+        // 仅最外层方法退出时才清理 TraceID，避免嵌套命中时内层把外层的 TraceID 清掉
+        boolean outermost = TraceContext.exitMethod();
+
+        // 采样率判断：异常调用始终保留，仅对成功调用按采样率丢弃
         AgentConfig config = AgentConfig.get();
-        if (config != null && Math.random() > config.getSamplingRate()) {
+        if (thrown == null && config != null && Math.random() > config.getSamplingRate()) {
+            if (outermost) TraceContext.clear();
             return;
         }
 
@@ -46,7 +51,9 @@ public class ControllerInterceptor {
         }
 
         ReportQueue.offer(record);
-        TraceContext.clear();
+        if (outermost) {
+            TraceContext.clear();
+        }
     }
 
     /** 获取当前线程的 TraceID（给其他拦截器使用） */

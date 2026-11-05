@@ -115,6 +115,13 @@ public class LogCollector {
         private long lastFileLength = 0;
         private final AtomicLong lineCounter = new AtomicLong(0);
 
+        // 分块读取缓冲：一次系统调用读取 64KB，替代之前逐字节 RandomAccessFile.read()
+        // （逐字节读取每个字节都是一次系统调用，日志量大时会明显占用业务进程 CPU）
+        private final byte[] readBuf = new byte[64 * 1024];
+        // 尚未遇到换行符的半行数据，跨轮次保留，避免把正在写入的日志行截成两条记录
+        private final ByteArrayOutputStream partialLine = new ByteArrayOutputStream(256);
+        private static final int MAX_LINE_BYTES = 256 * 1024;
+
         // 多行异常合并缓冲区
         private final StringBuilder multilineBuf = new StringBuilder(1024);
         private String currentFirstLine = null;
@@ -124,6 +131,8 @@ public class LogCollector {
         private final ArrayDeque<String> ringBuffer;
         private int pendingPostErrorLines = 0;
         private LogRecord pendingErrorRecord = null;
+        private List<String> pendingPreLines = null;
+        private long pendingErrorSince = 0;
         private final List<String> postErrorLines = new ArrayList<>();
 
         // 每秒限流计数器
@@ -211,7 +220,9 @@ public class LogCollector {
                 if (file == null || !target.getAbsolutePath().equals(file.getAbsolutePath())) {
                     if (file != null) {
                         System.out.println("[LogCollector] 检测到最新活跃文件切换: [" + file.getName() + "] -> [" + target.getName() + "]，自动接力增量采集 ✓");
+                        drainOldFile();
                         flushMultilineRecord();
+                        flushPendingError();
                     } else {
                         System.out.println("[LogCollector] 成功锁定并挂载活跃日志文件: [" + target.getAbsolutePath() + "] (当前大小: " + target.length() + " 字节) ✓");
                     }
@@ -241,6 +252,7 @@ public class LogCollector {
                     System.out.println("[LogCollector] 检测到日志文件发生轮转切割 (Rotation): " + file.getName() + "，游标重置为 0");
                     closeRaf();
                     raf = new RandomAccessFile(file, "r");
+                    partialLine.reset();
                     lastFileOffset = 0;
                     raf.seek(0);
                 }
@@ -251,41 +263,70 @@ public class LogCollector {
                     return;
                 }
 
-                // 增量读取新产生的文本行
-                String rawLine;
-                while ((rawLine = readNextLine(raf)) != null) {
-                    processLine(rawLine);
-                }
-                lastFileOffset = raf.getFilePointer();
+                // 增量读取新产生的完整文本行（半行留待下一轮）
+                readAvailable(raf);
                 lastFileLength = curLen;
 
             } catch (Exception e) {
                 closeRaf();
+                // 采集异常不再完全静默（每 60 秒最多一条），方便定位权限、编码等问题
+                long nowMs = System.currentTimeMillis();
+                if (nowMs - lastWarnTime > 60000) {
+                    System.err.println("[LogCollector] 采集异常，将自动重试: " + e);
+                    lastWarnTime = nowMs;
+                }
             }
         }
 
         /**
-         * 跨平台 UTF-8 安全按行读取
+         * 分块读取并按 \n 切分完整行（兼容 \r\n）。
+         * 字节先累积到 partialLine，遇到换行才整行按 UTF-8 解码，因此多字节字符不会被块边界截断；
+         * 没有换行结尾的半行保留到下一轮，不会被当成完整的一行。
          */
-        private String readNextLine(RandomAccessFile reader) throws Exception {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream(256);
-            int b;
-            boolean hasData = false;
-            while ((b = reader.read()) != -1) {
-                hasData = true;
-                if (b == '\n') break;
-                if (b == '\r') {
-                    long curPos = reader.getFilePointer();
-                    int next = reader.read();
-                    if (next != '\n' && next != -1) {
-                        reader.seek(curPos);
+        private void readAvailable(RandomAccessFile reader) throws Exception {
+            int n;
+            while ((n = reader.read(readBuf)) > 0) {
+                int start = 0;
+                for (int i = 0; i < n; i++) {
+                    if (readBuf[i] == '\n') {
+                        partialLine.write(readBuf, start, i - start);
+                        emitPartialLine();
+                        start = i + 1;
                     }
-                    break;
                 }
-                bos.write(b);
+                if (start < n) {
+                    partialLine.write(readBuf, start, n - start);
+                    if (partialLine.size() > MAX_LINE_BYTES) {
+                        // 超长行（无换行）强制切断，防止内存无限增长
+                        emitPartialLine();
+                    }
+                }
             }
-            if (!hasData) return null;
-            return bos.toString(StandardCharsets.UTF_8);
+            lastFileOffset = reader.getFilePointer();
+        }
+
+        private void emitPartialLine() {
+            byte[] bytes = partialLine.toByteArray();
+            partialLine.reset();
+            int len = bytes.length;
+            if (len > 0 && bytes[len - 1] == '\r') len--;
+            processLine(new String(bytes, 0, len, StandardCharsets.UTF_8));
+        }
+
+        /**
+         * 切换到新的活跃文件前，把旧文件里尚未读完的内容读完，避免日志滚动瞬间丢失尾部日志
+         */
+        private void drainOldFile() {
+            try {
+                if (raf != null) {
+                    readAvailable(raf);
+                }
+                if (partialLine.size() > 0) {
+                    emitPartialLine();
+                }
+            } catch (Exception ignored) {
+                partialLine.reset();
+            }
         }
 
         private void processLine(String line) {
@@ -298,10 +339,8 @@ public class LogCollector {
                 postErrorLines.add(line);
                 pendingPostErrorLines--;
                 if (pendingPostErrorLines == 0) {
-                    // 后续行捕获完毕，将上下文序列化存入该记录
-                    pendingErrorRecord.setContextJson(buildContextSnapshot(postErrorLines));
-                    postErrorLines.clear();
-                    pendingErrorRecord = null;
+                    // 后续行捕获完毕，补全上下文后再入队发送
+                    flushPendingError();
                 }
             }
 
@@ -340,6 +379,10 @@ public class LogCollector {
         private void checkFlushTimeout() {
             if (multilineBuf.length() > 0 && (System.currentTimeMillis() - lastLineTime > 800)) {
                 flushMultilineRecord();
+            }
+            // ERROR 之后日志长时间没有新行：不再继续等待后文，带着已有上下文发出
+            if (pendingErrorRecord != null && System.currentTimeMillis() - pendingErrorSince > 2000) {
+                flushPendingError();
             }
         }
 
@@ -431,28 +474,56 @@ public class LogCollector {
 
             // 7. 若是 ERROR，从 RingBuffer 提取上下文快照，并启动后 5 行追踪
             if (isError) {
-                record.setContextJson(buildContextSnapshot(null));
+                // 上一条还在等后文的 ERROR 先发出，保证不丢
+                flushPendingError();
+                pendingPreLines = snapshotRing();
                 pendingErrorRecord = record;
+                pendingErrorSince = System.currentTimeMillis();
                 pendingPostErrorLines = 5;
                 postErrorLines.clear();
+                // 暂不入队：之前是先入队再回填 contextJson，批次可能在回填前就被序列化发送，上下文会丢
+                return;
             }
 
             reportQueue.offer(record);
         }
 
-        private String buildContextSnapshot(List<String> nextLines) {
+        /**
+         * 补全 ERROR 的前后文并入队
+         */
+        private void flushPendingError() {
+            if (pendingErrorRecord == null) return;
+            pendingErrorRecord.setContextJson(buildContextJson(pendingPreLines, postErrorLines));
+            reportQueue.offer(pendingErrorRecord);
+            pendingErrorRecord = null;
+            pendingPreLines = null;
+            pendingPostErrorLines = 0;
+            postErrorLines.clear();
+        }
+
+        private List<String> snapshotRing() {
+            synchronized (ringBuffer) {
+                return new ArrayList<>(ringBuffer);
+            }
+        }
+
+        /**
+         * 前文（ERROR 发生时刻的滑动窗口快照）+ 后文。
+         * 以前是"回填时的整个滑动窗口 + 后文"，而窗口此时已包含后文，会造成后文重复。
+         */
+        private String buildContextJson(List<String> pre, List<String> post) {
             StringBuilder sb = new StringBuilder();
             sb.append("[");
             boolean first = true;
-            synchronized (ringBuffer) {
-                for (String line : ringBuffer) {
+            if (pre != null) {
+                for (String line : pre) {
                     if (!first) sb.append(",");
                     first = false;
                     sb.append("\"").append(escapeJson(line)).append("\"");
                 }
             }
-            if (nextLines != null) {
-                for (String line : nextLines) {
+            if (post != null) {
+                for (String line : post) {
                     if (!first) sb.append(",");
                     first = false;
                     sb.append("\"").append(escapeJson(line)).append("\"");
@@ -463,8 +534,7 @@ public class LogCollector {
         }
 
         private String escapeJson(String s) {
-            if (s == null) return "";
-            return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
+            return com.monitor.agent.reporter.JsonSerializer.escape(s);
         }
     }
 
@@ -473,17 +543,25 @@ public class LogCollector {
      */
     private static void reportLoop() {
         List<LogRecord> batch = new ArrayList<>(64);
+        int attempts = 0;
         while (running.get()) {
             try {
-                LogRecord first = reportQueue.poll(2, TimeUnit.SECONDS);
-                if (first != null) {
-                    batch.add(first);
-                    reportQueue.drainTo(batch, 49);
+                if (batch.isEmpty()) {
+                    LogRecord first = reportQueue.poll(2, TimeUnit.SECONDS);
+                    if (first != null) {
+                        batch.add(first);
+                        reportQueue.drainTo(batch, 49);
+                    }
                 }
 
                 if (!batch.isEmpty()) {
-                    sendBatch(batch);
-                    batch.clear();
+                    // 发送失败（网络抖动 / 5xx）时保留该批次重试，最多 3 次；之前是无论成败直接清空
+                    if (sendBatch(batch) || ++attempts >= 3) {
+                        batch.clear();
+                        attempts = 0;
+                    } else {
+                        Thread.sleep(2000L * attempts);
+                    }
                 }
             } catch (InterruptedException e) {
                 break;
@@ -493,8 +571,11 @@ public class LogCollector {
         }
     }
 
-    private static void sendBatch(List<LogRecord> list) {
-        if (agentConfig == null || list.isEmpty()) return;
+    /**
+     * @return true 表示该批次已处理完毕（成功，或服务端明确拒绝且重试无意义）；false 表示可重试
+     */
+    private static boolean sendBatch(List<LogRecord> list) {
+        if (agentConfig == null || list.isEmpty()) return true;
         try {
             String baseUrl = agentConfig.getServerUrl();
             if (baseUrl.endsWith("/apm")) {
@@ -523,12 +604,26 @@ public class LogCollector {
             }
 
             int code = conn.getResponseCode();
-            if (code >= 300) {
-                System.err.println("[LogCollector] 上报日志批次失败 HTTP " + code);
-            }
             conn.disconnect();
+            if (code >= 200 && code < 300) {
+                return true;
+            }
+            logSendFailure("HTTP " + code);
+            return !(code == 401 || code == 403 || code == 408 || code == 429 || code >= 500);
         } catch (Exception e) {
-            // 静默，防止网络抖动刷屏
+            logSendFailure(e.getClass().getSimpleName() + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static volatile long lastSendWarnTime = 0;
+
+    /** 失败日志节流：每 60 秒最多打印一次，既不再完全静默，也不会在网络抖动时刷屏 */
+    private static void logSendFailure(String reason) {
+        long now = System.currentTimeMillis();
+        if (now - lastSendWarnTime >= 60_000L) {
+            lastSendWarnTime = now;
+            System.err.println("[LogCollector] 上报日志批次失败，将重试: " + reason);
         }
     }
 
@@ -571,7 +666,7 @@ public class LogCollector {
     private static void appendField(StringBuilder sb, String key, String val) {
         sb.append("\"").append(key).append("\":\"");
         if (val != null) {
-            sb.append(val.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"));
+            sb.append(com.monitor.agent.reporter.JsonSerializer.escape(val));
         }
         sb.append("\"");
     }

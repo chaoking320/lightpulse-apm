@@ -42,4 +42,11 @@ public class AuthConfig {
      * Agent 数据上报专用安全 Token（若配置则强制校验，留空则免密放行）
      */
     private String agentSecretToken = "";
+
+    /**
+     * Agent 严格鉴权（默认 false，行为与旧版完全一致）。
+     * 开启后：必须已配置自定义 agentSecretToken，Agent 上报必须携带与之完全一致的 Token，不再接受默认 Token。
+     * 若开启时仍未配置自定义 Token，则自动忽略此开关并输出告警，避免把所有 Agent 锁在门外。
+     */
+    private boolean strictAgentAuth = false;
 }

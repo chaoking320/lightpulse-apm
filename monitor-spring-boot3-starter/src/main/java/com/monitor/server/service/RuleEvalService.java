@@ -58,8 +58,10 @@ public class RuleEvalService {
         String mtdPattern = rule.getTargetMethod();
 
         // 查询该窗口内的端点指标
-        List<Map<String, Object>> endpoints = metricRepo.endpointList(
-                "*".equals(appName) ? "%" : appName, since);
+        boolean allApps = "*".equals(appName);
+        List<Map<String, Object>> endpoints = allApps
+                ? metricRepo.endpointListAllApps(since)
+                : metricRepo.endpointList(appName, since);
 
         for (Map<String, Object> ep : endpoints) {
             String epClass = str(ep.get("class_name"));
@@ -80,7 +82,9 @@ public class RuleEvalService {
             // 阈值比对
             boolean triggered = compareThreshold(currentVal, rule.getThreshold(), rule.getOperator());
             if (triggered) {
-                fireAlert(rule, epClass, epMethod, currentVal);
+                // "所有应用"规则按端点所属的真实应用分别告警，避免不同应用同名端点被合并、也便于定位
+                String alertApp = allApps ? str(ep.get("app_name")) : rule.getAppName();
+                fireAlert(rule, alertApp, epClass, epMethod, currentVal);
             }
         }
     }
@@ -116,7 +120,7 @@ public class RuleEvalService {
     }
 
     /** 触发告警 */
-    private void fireAlert(ApmMonitorRule rule, String epClass, String epMethod, BigDecimal currentVal) {
+    private void fireAlert(ApmMonitorRule rule, String alertApp, String epClass, String epMethod, BigDecimal currentVal) {
         String msg = String.format("【%s】%s %s%s%s 当前值=%.2f 阈值=%.2f",
                 rule.getRuleName(),
                 epClass + "." + epMethod,
@@ -125,8 +129,9 @@ public class RuleEvalService {
 
         // 统一通过 AlertNotificationService 触发：支持静默防轰炸降噪、记录入库并推送 Webhook (钉钉/企微)
         alertNotificationService.triggerAlert(
+                rule.getId(),
                 rule.getRuleName(),
-                rule.getAppName(),
+                alertApp,
                 epClass + "." + epMethod,
                 currentVal,
                 rule.getThreshold(),

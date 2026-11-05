@@ -6,6 +6,14 @@ package com.monitor.agent.interceptor;
 public class TraceContext {
     
     private static final ThreadLocal<String> TRACE_ID = new ThreadLocal<>();
+
+    /** 当前线程内被拦截方法的嵌套深度，用于只在最外层方法退出时才清理 TraceID */
+    private static final ThreadLocal<int[]> DEPTH = new ThreadLocal<int[]>() {
+        @Override
+        protected int[] initialValue() {
+            return new int[1];
+        }
+    };
     
     public static String get() {
         return TRACE_ID.get();
@@ -26,6 +34,31 @@ public class TraceContext {
             TRACE_ID.set(id);
         }
         return id;
+    }
+
+    /**
+     * 进入一个被拦截的方法（嵌套深度 +1）
+     */
+    public static void enterMethod() {
+        DEPTH.get()[0]++;
+    }
+
+    /**
+     * 退出一个被拦截的方法（嵌套深度 -1）
+     * @return true 表示已退出最外层，此时才应清理 TraceID；
+     *         嵌套命中（如 Controller 调用同样被匹配的 Service）时，内层退出不能清掉外层的 TraceID
+     */
+    public static boolean exitMethod() {
+        int[] d = DEPTH.get();
+        if (d[0] > 0) {
+            d[0]--;
+        }
+        if (d[0] == 0) {
+            // 深度归零后一并移除 ThreadLocal 值，避免线程池线程长期持有
+            DEPTH.remove();
+            return true;
+        }
+        return false;
     }
     
     private static String generateTraceId() {

@@ -26,6 +26,19 @@ public interface ApmEndpointMetricRepo extends BaseMapper<ApmEndpointMetric> {
             "ORDER BY calls DESC")
     List<Map<String,Object>> endpointList(@Param("app") String app, @Param("since") LocalDateTime since);
 
+    /**
+     * 不限定应用的端点聚合（供规则里 appName="*" 的"所有应用"规则使用）。
+     * 之前规则引擎把 * 换成 % 再走 app_name=#{app} 的等值查询，什么都匹配不到，导致这类规则永远不触发。
+     */
+    @Select("SELECT app_name, class_name,method_name,http_method,http_path," +
+            "SUM(total_calls) calls,SUM(error_calls) errors," +
+            "COALESCE(SUM(total_cost_ms)/NULLIF(SUM(total_calls),0),0) avg_cost," +
+            "MAX(max_cost_ms) max_cost " +
+            "FROM apm_endpoint_metric WHERE bucket_minute>=#{since} " +
+            "GROUP BY app_name,class_name,method_name,http_method,http_path " +
+            "ORDER BY calls DESC")
+    List<Map<String,Object>> endpointListAllApps(@Param("since") LocalDateTime since);
+
     @Select("SELECT DATE_FORMAT(bucket_minute,'%H:%i') t," +
             "SUM(total_calls) calls,COALESCE(SUM(total_cost_ms)/NULLIF(SUM(total_calls),0),0) avg_cost " +
             "FROM apm_endpoint_metric WHERE app_name=#{app} AND class_name=#{cls} AND method_name=#{mtd} " +

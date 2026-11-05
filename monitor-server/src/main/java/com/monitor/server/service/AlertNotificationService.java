@@ -42,6 +42,15 @@ public class AlertNotificationService {
     public void triggerAlert(String alertType, String appName, String target,
                              BigDecimal currentValue, BigDecimal threshold,
                              String operator, String message) {
+        triggerAlert(null, alertType, appName, target, currentValue, threshold, operator, message);
+    }
+
+    /**
+     * 触发告警（带规则 ID，便于告警记录回溯到具体规则；ruleId 为空时与旧行为一致，记为 0）
+     */
+    public void triggerAlert(Long ruleId, String alertType, String appName, String target,
+                             BigDecimal currentValue, BigDecimal threshold,
+                             String operator, String message) {
         // 1. 检查告警静默降噪窗口：同一目标在静默期内（默认 30 分钟）不重复入库也不重复推送，防止刷爆告警中心与群聊
         String silenceKey = alertType + ":" + appName + ":" + target;
         long now = System.currentTimeMillis();
@@ -55,7 +64,7 @@ public class AlertNotificationService {
 
         // 2. 保存告警记录到 DB (仅首次触发或跨越静默期后记录一条)
         ApmAlertRecord record = new ApmAlertRecord();
-        record.setRuleId(0L);
+        record.setRuleId(ruleId != null ? ruleId : 0L);
         record.setRuleName(alertType);
         record.setAppName(appName);
         record.setAlertType(alertType);
@@ -76,6 +85,29 @@ public class AlertNotificationService {
 
         // 3. 异步发送 Webhook 消息
         sendWebhook(alertType, appName, target, message);
+    }
+
+    /**
+     * 转义后再拼进 Webhook 的 JSON 字符串字段：告警目标/消息里的引号、反斜杠、换行
+     * 以前会直接破坏 JSON，导致机器人拒收这条告警。
+     */
+    private static String jsonEsc(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '\\': sb.append("\\\\"); break;
+                case '"':  sb.append("\\\""); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     private void sendWebhook(String alertType, String appName, String target, String message) {
@@ -128,7 +160,7 @@ public class AlertNotificationService {
                             "content": "### <font color=\\"warning\\">【LightPulse 监控告警】</font>\\n> **告警类型**: %s\\n> **应用名称**: %s\\n> **监控目标**: %s\\n> **详细信息**: %s\\n> **时间**: %s%s"
                         }
                     }
-                    """, alertType, appName, target, message, LocalDateTime.now(), atText);
+                    """, jsonEsc(alertType), jsonEsc(appName), jsonEsc(target), jsonEsc(message), LocalDateTime.now(), atText);
             } else if (webhookUrl.contains("dingtalk.com")) {
                 // 钉钉格式
                 String atText = "";
@@ -141,7 +173,7 @@ public class AlertNotificationService {
                     atBlock = ", \"at\": {\"atMobiles\": [" + String.join(",", mobileList.stream().map(m -> "\"" + m + "\"").toList()) + "], \"isAtAll\": false}";
                 }
                 String dtContent = String.format("### 【LightPulse 监控告警】\\n- **告警类型**: %s\\n- **应用名称**: %s\\n- **监控目标**: %s\\n- **详细信息**: %s\\n- **时间**: %s%s",
-                        alertType, appName, target, message, LocalDateTime.now(), atText);
+                        jsonEsc(alertType), jsonEsc(appName), jsonEsc(target), jsonEsc(message), LocalDateTime.now(), atText);
                 jsonPayload = "{\"msgtype\": \"markdown\", \"markdown\": {\"title\": \"LightPulse 监控告警\", \"text\": \"" + dtContent + "\"}" + atBlock + "}";
             } else {
                 // 通用 Webhook 格式
@@ -153,7 +185,7 @@ public class AlertNotificationService {
                         "message": "%s",
                         "timestamp": "%s"
                     }
-                    """, alertType, appName, target, message, LocalDateTime.now());
+                    """, jsonEsc(alertType), jsonEsc(appName), jsonEsc(target), jsonEsc(message), LocalDateTime.now());
             }
 
             HttpRequest request = HttpRequest.newBuilder()

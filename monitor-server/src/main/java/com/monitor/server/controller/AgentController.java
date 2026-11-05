@@ -138,8 +138,9 @@ public class AgentController {
                 boolean success = !Boolean.FALSE.equals(m.get("success"));
 
                 // 按分钟聚合的 key
-                LocalDateTime bucket = LocalDateTime.ofEpochSecond(
-                        timestamp / 1000 / 60 * 60, 0, java.time.ZoneOffset.ofHours(8));
+                // 使用服务端默认时区，与查询侧 LocalDateTime.now() 保持一致（之前写死 UTC+8，非东八区部署会错位）
+                LocalDateTime bucket = LocalDateTime.ofInstant(
+                        java.time.Instant.ofEpochSecond(timestamp / 1000 / 60 * 60), java.time.ZoneId.systemDefault());
                 String key = appName + "|" + className + "|" + methodName + "|" + bucket;
 
                 ApmEndpointMetric agg = aggMap.computeIfAbsent(key, k -> {

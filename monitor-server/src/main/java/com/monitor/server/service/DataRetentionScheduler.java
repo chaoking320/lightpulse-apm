@@ -34,6 +34,20 @@ public class DataRetentionScheduler {
     private final ApmAlertRecordRepo alertRecordRepo;
     private final com.monitor.server.repository.ApmLogRecordRepo logRecordRepo;
     private final com.monitor.server.repository.ApmSlowSqlRepo slowSqlRepo;
+    private final com.monitor.server.repository.ApmEndpointMetricRepo endpointMetricRepo;
+
+    /**
+     * 是否自动清理接口指标明细表 apm_endpoint_metric。
+     * 默认关闭：首次启用时会一次性删除超出保留周期的全部历史数据，属于有破坏性的行为变更，由使用者显式开启。
+     * 开启方式：lightpulse.retention.endpoint-metric.enabled=true
+     */
+    @org.springframework.beans.factory.annotation.Value("${lightpulse.retention.endpoint-metric.enabled:false}")
+    private boolean endpointMetricCleanupEnabled;
+
+    /** 每批删除行数：分批 + 批间停顿，避免一条超大 DELETE 长时间锁表、撑爆事务日志 */
+    private static final int ENDPOINT_METRIC_BATCH = 5000;
+    /** 单次巡检最多删除的批数（约 1000 万行），剩余部分留给次日继续 */
+    private static final int ENDPOINT_METRIC_MAX_BATCHES = 2000;
 
     @PostConstruct
     public void init() {
@@ -86,6 +100,36 @@ public class DataRetentionScheduler {
                     deletedMetrics, deletedProbes, deletedLogs, deletedAlerts);
         } catch (Exception e) {
             log.error("[DataRetention] 清理本地数据库历史数据异常: {}", e.getMessage());
+        }
+
+        // 3. 接口指标明细（apm_endpoint_metric）：此前从未被清理，会随时间无限增长
+        purgeEndpointMetrics(threshold);
+    }
+
+    private void purgeEndpointMetrics(LocalDateTime threshold) {
+        if (!endpointMetricCleanupEnabled) {
+            log.info("[DataRetention] 接口指标明细表 apm_endpoint_metric 的自动清理未启用，该表会持续增长；"
+                    + "确认后可设置 lightpulse.retention.endpoint-metric.enabled=true 开启");
+            return;
+        }
+        long total = 0;
+        try {
+            for (int i = 0; i < ENDPOINT_METRIC_MAX_BATCHES; i++) {
+                int n = endpointMetricRepo.delete(
+                        new LambdaQueryWrapper<com.monitor.server.entity.ApmEndpointMetric>()
+                                .lt(com.monitor.server.entity.ApmEndpointMetric::getBucketMinute, threshold)
+                                .last("LIMIT " + ENDPOINT_METRIC_BATCH));
+                total += n;
+                if (n < ENDPOINT_METRIC_BATCH) {
+                    break;
+                }
+                Thread.sleep(200);
+            }
+            log.info("[DataRetention] 接口指标明细清理完成: 删除 {} 条 (早于 {})", total, threshold);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.error("[DataRetention] 清理接口指标明细异常 (已删除 {} 条): {}", total, e.getMessage());
         }
     }
 }
