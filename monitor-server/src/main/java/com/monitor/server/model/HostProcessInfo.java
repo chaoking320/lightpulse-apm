@@ -1,5 +1,6 @@
 package com.monitor.server.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -23,4 +24,22 @@ public class HostProcessInfo {
     private String memoryFormatted;
     private Double memoryPercent;
     private String command;
+
+    @JsonProperty("processName")
+    public String getProcessName() {
+        return name;
+    }
+
+    public void setProcessName(String processName) {
+        this.name = processName;
+    }
+
+    @JsonProperty("commandLine")
+    public String getCommandLine() {
+        return command;
+    }
+
+    public void setCommandLine(String commandLine) {
+        this.command = commandLine;
+    }
 }

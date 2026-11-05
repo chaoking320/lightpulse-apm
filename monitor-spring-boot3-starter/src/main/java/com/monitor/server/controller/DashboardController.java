@@ -43,6 +43,15 @@ public class DashboardController {
         return Map.of("code", 200, "data", hostProcessInspector.captureSnapshot(hostName));
     }
 
+    /**
+     * 控制台：查询历史案发现场暴涨快照列表 (黑匣子)
+     */
+    @GetMapping("/system-metrics/crime-scene-snapshots")
+    public Map<String, Object> getCrimeSceneSnapshots() {
+        return Map.of("code", 200, "data", hostProcessInspector.getCrimeSceneSnapshots());
+    }
+
+
     /** 应用概览 */
     @GetMapping("/apps")
     public List<Map<String,Object>> listApps() {

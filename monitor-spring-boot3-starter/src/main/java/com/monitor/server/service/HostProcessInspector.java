@@ -383,4 +383,62 @@ public class HostProcessInspector {
     private long parseLong(String s) {
         try { return Long.parseLong(s.trim()); } catch (Exception e) { return 0L; }
     }
+
+    // 案发现场黑匣子：最大保留最近 30 条严重告警/暴涨瞬间快照
+    // 纯内存 Ring Buffer，单个快照约 2KB，总内存消耗 < 70KB，绝对零存储压力！
+    private final Deque<HostProcessSnapshot> crimeSceneSnapshots = new java.util.concurrent.ConcurrentLinkedDeque<>();
+    private final Map<String, Long> lastCrimeSceneTimeMap = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 自动化案发现场黑匣子抓拍
+     * 当监控检测到 CPU 或物理内存突破危险告警阈值时，自动抓拍全机进程能耗真凶
+     */
+    public void checkAndCaptureCrimeScene(com.monitor.server.entity.ApmSystemMetric metric, double cpuThreshold, double memThreshold) {
+        if (metric == null) return;
+        double cpu = metric.getSystemCpuLoad() != null ? metric.getSystemCpuLoad() : 0.0;
+        double mem = metric.getMemoryUsedPercent() != null ? metric.getMemoryUsedPercent() : 0.0;
+        if (cpu < cpuThreshold && mem < memThreshold) {
+            return;
+        }
+
+        String host = (metric.getHostName() != null && !metric.getHostName().isBlank()) ? metric.getHostName() : "localhost";
+        long now = System.currentTimeMillis();
+        Long lastTime = lastCrimeSceneTimeMap.get(host);
+        // 单机 5 分钟冷却防抖机制，避免持续告警时反复抓拍
+        if (lastTime != null && (now - lastTime) < 5 * 60 * 1000L) {
+            return;
+        }
+        lastCrimeSceneTimeMap.put(host, now);
+
+        try {
+            HostProcessSnapshot snapshot = captureSnapshot(host);
+            String reason;
+            if (mem >= memThreshold && cpu >= cpuThreshold) {
+                reason = String.format("整机内存暴涨 (%.1f%%) 且 CPU 高压 (%.1f%%)", mem, cpu);
+            } else if (mem >= memThreshold) {
+                reason = String.format("整机内存暴涨达到 %.1f%% (告警阈值 %.0f%%)", mem, memThreshold);
+            } else {
+                reason = String.format("整机 CPU 负载突破 %.1f%% (告警阈值 %.0f%%)", cpu, cpuThreshold);
+            }
+            snapshot.setIsCrimeScene(true);
+            snapshot.setCrimeSceneReason(reason);
+
+            crimeSceneSnapshots.addFirst(snapshot);
+            while (crimeSceneSnapshots.size() > 30) {
+                crimeSceneSnapshots.pollLast();
+            }
+            log.warn("🚨 [APM 黑匣子] 成功抓拍案发现场进程快照! 节点={}, 原因={}", host, reason);
+        } catch (Exception e) {
+            log.error("自动化抓拍案发现场异常: {}", e.getMessage());
+        }
+    }
+
+    public List<HostProcessSnapshot> getCrimeSceneSnapshots() {
+        return new ArrayList<>(crimeSceneSnapshots);
+    }
+
+    public void clearCrimeSceneSnapshots() {
+        crimeSceneSnapshots.clear();
+    }
+
 }

@@ -10,11 +10,106 @@
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/antd/5.12.8/reset.min.css">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background: #f5f5f5; color: #333; }
-.header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
-.header h1 { font-size: 18px; font-weight: 600; }
-.header .sub { font-size: 12px; opacity: .7; }
+/* ========== CSS Variables & Theme System ========== */
+:root {
+  /* Light Theme (Default) */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #f1f5f9;
+  --bg-hover: #f0f0f0;
+  --bg-active: #e0e0e0;
+  --bg-overlay: rgba(0, 0, 0, 0.45);
+  
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-tertiary: #94a3b8;
+  --text-inverse: #ffffff;
+  
+  --border-color: #e2e8f0;
+  --border-hover: #cbd5e1;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  
+  --primary-color: #3b82f6;
+  --primary-hover: #2563eb;
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+  --danger-color: #ef4444;
+  --info-color: #06b6d4;
+  
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Dark Theme */
+[data-theme="dark"] {
+  --bg-primary: #1e293b;
+  --bg-secondary: #0f172a;
+  --bg-tertiary: #334155;
+  --bg-hover: #475569;
+  --bg-active: #64748b;
+  --bg-overlay: rgba(0, 0, 0, 0.7);
+  
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #94a3b8;
+  --text-inverse: #0f172a;
+  
+  --border-color: #334155;
+  --border-hover: #475569;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.7);
+}
+
+/* ========== Global Resets & Base Styles ========== */
+* { 
+  margin: 0; 
+  padding: 0; 
+  box-sizing: border-box; 
+}
+
+body { 
+  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif; 
+  background: var(--bg-secondary); 
+  color: var(--text-primary); 
+  line-height: 1.5;
+  transition: background-color var(--transition-base), color var(--transition-base);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ========== Header & Navigation ========== */
+.header { 
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); 
+  color: var(--text-inverse); 
+  padding: 16px 24px; 
+  display: flex; 
+  align-items: center; 
+  gap: 12px;
+  box-shadow: var(--shadow-md);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  backdrop-filter: blur(8px);
+}
+
+.header h1 { 
+  font-size: 18px; 
+  font-weight: 600;
+  background: linear-gradient(135deg, #ffffff 0%, #93c5fd 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.header .sub { 
+  font-size: 12px; 
+  opacity: 0.85;
+  color: #cbd5e1;
+}
 .container { max-width: 1400px; margin: 0 auto; padding: 16px; }
 .kpi-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 16px; }
 .kpi-card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
@@ -1286,22 +1381,34 @@ function SvgBarChart({ timeline = [], series = [], height = 220, emptyText = '�
   );
 }
 
-function ProcessRcaModal({ visible, hostName, onClose }) {
+function ProcessRcaModal({ visible, hostName, initialMode = 'realtime', onClose }) {
+  const [activeMode, setActiveMode] = useState(initialMode || 'realtime');
   const [loading, setLoading] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [selectedHost, setSelectedHost] = useState(hostName || 'ALL');
   const [hostList, setHostList] = useState([]);
+  const [crimeScenes, setCrimeScenes] = useState([]);
+  const [selectedCrimeIdx, setSelectedCrimeIdx] = useState(0);
   const [cmdFilter, setCmdFilter] = useState('');
   const [expandedCmdPid, setExpandedCmdPid] = useState(null);
 
   useEffect(() => {
     if (visible) {
       setSelectedHost(hostName || 'ALL');
+      setActiveMode(initialMode || 'realtime');
       api('/api/v1/system-metrics/hosts').then(r => setHostList(r?.data || [])).catch(() => {});
+      api('/api/v1/system-metrics/crime-scene-snapshots').then(r => {
+        const list = r?.data || [];
+        setCrimeScenes(list);
+        if (list.length > 0 && initialMode === 'crimescene') {
+          setSelectedCrimeIdx(0);
+          setSnapshot(list[0]);
+        }
+      }).catch(() => {});
     }
-  }, [visible, hostName]);
+  }, [visible, hostName, initialMode]);
 
-  const loadSnapshot = useCallback((hName) => {
+  const loadRealtimeSnapshot = useCallback((hName) => {
     setLoading(true);
     const target = hName || selectedHost;
     const url = (target && target !== 'ALL')
@@ -1320,15 +1427,18 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
   }, [selectedHost]);
 
   useEffect(() => {
-    if (visible) {
-      loadSnapshot(selectedHost);
+    if (visible && activeMode === 'realtime') {
+      loadRealtimeSnapshot(selectedHost);
+    } else if (visible && activeMode === 'crimescene' && crimeScenes.length > 0) {
+      setSnapshot(crimeScenes[selectedCrimeIdx] || crimeScenes[0]);
     }
-  }, [visible, selectedHost, loadSnapshot]);
+  }, [visible, activeMode, selectedHost, selectedCrimeIdx, loadRealtimeSnapshot, crimeScenes]);
 
   if (!visible) return null;
 
   const isHighMem = (snapshot?.memoryUsedPercent || 0) >= 80.0;
-  const isHighCpu = (snapshot?.cpuLoadPercent || 0) >= 70.0;
+  const cpuVal = snapshot?.systemCpuLoad != null ? snapshot.systemCpuLoad : (snapshot?.cpuLoadPercent != null ? snapshot.cpuLoadPercent : 0);
+  const isHighCpu = cpuVal >= 70.0;
 
   const getCatBadgeClass = (cat) => {
     switch ((cat || '').toUpperCase()) {
@@ -1355,46 +1465,35 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
   const procs = (snapshot?.topProcesses || []).filter(p => {
     if (!cmdFilter) return true;
     const q = cmdFilter.toLowerCase();
-    return (p.processName || '').toLowerCase().includes(q)
-      || (p.commandLine || '').toLowerCase().includes(q)
-      || (p.user || '').toLowerCase().includes(q)
-      || String(p.pid).includes(q)
-      || (p.categoryLabel || '').toLowerCase().includes(q);
+    const pName = (p.processName || p.name || '').toLowerCase();
+    const cmd = (p.commandLine || p.command || '').toLowerCase();
+    const user = (p.user || '').toLowerCase();
+    const cat = (p.categoryLabel || '').toLowerCase();
+    return pName.includes(q) || cmd.includes(q) || user.includes(q) || String(p.pid).includes(q) || cat.includes(q);
   });
 
   return React.createElement('div', { className: 'modal-mask' },
     React.createElement('div', {
       className: 'modal',
-      style: { width: 920, maxWidth: '96vw', maxHeight: '90vh', overflowY: 'auto', padding: 22 }
+      style: { width: 940, maxWidth: '96vw', maxHeight: '92vh', overflowY: 'auto', padding: 22 }
     },
+      // Header
       React.createElement('div', {
-        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: 12, marginBottom: 16 }
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #e2e8f0', paddingBottom: 12, marginBottom: 14 }
       },
         React.createElement('div', {},
           React.createElement('h3', { style: { margin: 0, fontSize: 17, display: 'flex', alignItems: 'center', gap: 8 } },
             React.createElement('span', { style: { fontSize: 20 } }, '⚡'),
-            '全机跨进程能耗与暴涨根因智能排查'
+            '全机跨进程能耗与暴涨根因智能排查',
+            snapshot?.isCrimeScene && React.createElement('span', {
+              style: { fontSize: 11, background: '#ef4444', color: '#fff', padding: '2px 8px', borderRadius: 12, fontWeight: 700 }
+            }, '🚨 案发现场黑匣子')
           ),
           React.createElement('div', { style: { fontSize: 12, color: '#64748b', marginTop: 3 } },
             '突破传统 JVM 堆盲区 · 穿透全机进程真实 RSS 物理内存与 CPU 负载 · 智能诊断失控元凶'
           )
         ),
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('select', {
-            value: selectedHost,
-            onChange: (e) => setSelectedHost(e.target.value),
-            style: { padding: '4px 8px', fontSize: 12, border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff' }
-          },
-            React.createElement('option', { value: 'ALL' }, '🖥️ 本机 / 默认节点'),
-            hostList.map(h => React.createElement('option', { key: h.hostName, value: h.hostName },
-              (h.hostName || 'node') + (h.ipAddress ? ` (${h.ipAddress})` : '')
-            ))
-          ),
-          React.createElement('button', {
-            className: 'btn small',
-            disabled: loading,
-            onClick: () => loadSnapshot(selectedHost)
-          }, loading ? '⏳ 采样中...' : '🔄 重新抓取'),
           React.createElement('button', {
             className: 'btn small',
             style: { border: 'none', background: 'transparent', fontSize: 18, color: '#94a3b8', cursor: 'pointer', padding: '0 6px' },
@@ -1403,13 +1502,100 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
         )
       ),
 
+      // 实时采样 vs 案发现场黑匣子 模式切换栏
+      React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14, background: '#f8fafc', padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0' }
+      },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+          React.createElement('button', {
+            className: 'btn small' + (activeMode === 'realtime' ? ' active' : ''),
+            style: activeMode === 'realtime' ? { background: '#0284c7', color: '#fff', borderColor: '#0369a1', fontWeight: 600 } : {},
+            onClick: () => {
+              setActiveMode('realtime');
+              loadRealtimeSnapshot(selectedHost);
+            }
+          }, '⚡ 实时进程快照'),
+          React.createElement('button', {
+            className: 'btn small' + (activeMode === 'crimescene' ? ' active' : ''),
+            style: activeMode === 'crimescene' ? { background: '#ef4444', color: '#fff', borderColor: '#dc2626', fontWeight: 600 } : {},
+            onClick: () => {
+              setActiveMode('crimescene');
+              if (crimeScenes.length > 0) {
+                setSnapshot(crimeScenes[selectedCrimeIdx] || crimeScenes[0]);
+              }
+            }
+          }, `🚨 暴涨案发现场黑匣子 (${crimeScenes.length})`)
+        ),
+
+        activeMode === 'realtime'
+          ? React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              React.createElement('select', {
+                value: selectedHost,
+                onChange: (e) => setSelectedHost(e.target.value),
+                style: { padding: '4px 8px', fontSize: 12, border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff' }
+              },
+                React.createElement('option', { value: 'ALL' }, '🖥️ 本机 / 默认节点'),
+                hostList.map(h => React.createElement('option', { key: h.hostName, value: h.hostName },
+                  (h.hostName || 'node') + (h.ipAddress ? ` (${h.ipAddress})` : '')
+                ))
+              ),
+              React.createElement('button', {
+                className: 'btn small',
+                disabled: loading,
+                onClick: () => loadRealtimeSnapshot(selectedHost)
+              }, loading ? '⏳ 采样中...' : '🔄 重新抓取')
+            )
+          : React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+              React.createElement('span', { style: { fontSize: 12, color: '#475569', fontWeight: 500 } }, '历史暴涨时刻:'),
+              crimeScenes.length === 0
+                ? React.createElement('span', { style: { fontSize: 12, color: '#94a3b8' } }, '暂无严重告警抓拍记录')
+                : React.createElement('select', {
+                    value: selectedCrimeIdx,
+                    onChange: (e) => {
+                      const idx = Number(e.target.value);
+                      setSelectedCrimeIdx(idx);
+                      setSnapshot(crimeScenes[idx]);
+                    },
+                    style: { padding: '4px 8px', fontSize: 12, border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', maxWidth: 360 }
+                  },
+                    crimeScenes.map((cs, idx) => React.createElement('option', { key: idx, value: idx },
+                      `[${cs.capturedAt}] ${cs.hostName || 'node'} - ${cs.crimeSceneReason || '异常'}`
+                    ))
+                  )
+            )
+      ),
+
+      // 案发现场黑匣子提示条 (如果在案发现场模式)
+      snapshot?.isCrimeScene && React.createElement('div', {
+        style: {
+          background: 'linear-gradient(90deg, #fef2f2 0%, #fee2e2 100%)',
+          border: '1px solid #fca5a5',
+          borderRadius: 8,
+          padding: '10px 14px',
+          marginBottom: 14,
+          fontSize: 12,
+          color: '#991b1b',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }
+      },
+        React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('span', { style: { fontSize: 16 } }, '🚨'),
+          React.createElement('strong', {}, '【历史暴涨瞬间案发现场完整留存】'),
+          React.createElement('span', {}, snapshot.crimeSceneReason || '内存或CPU突破告警阈值瞬间自动抓拍')
+        ),
+        React.createElement('span', { style: { fontFamily: 'monospace', fontWeight: 600 } }, '抓拍于: ' + snapshot.capturedAt)
+      ),
+
+      // 智能根因诊断 Callout 卡片
       React.createElement('div', {
         style: {
           background: isHighMem ? 'linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%)' : 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
           border: isHighMem ? '1px solid #fecdd3' : '1px solid #bbf7d0',
           borderRadius: 8,
           padding: '14px 18px',
-          marginBottom: 16,
+          marginBottom: 14,
           boxShadow: '0 2px 6px rgba(0,0,0,0.03)'
         }
       },
@@ -1436,6 +1622,7 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
         )
       ),
 
+      // 主机运行概览指标行
       React.createElement('div', {
         style: {
           display: 'grid',
@@ -1454,16 +1641,12 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
           React.createElement('strong', { style: { color: '#0f172a' } }, (snapshot?.hostName || '-') + (snapshot?.ipAddress ? ` (${snapshot.ipAddress})` : ''))
         ),
         React.createElement('div', {},
-          React.createElement('span', { style: { color: '#64748b' } }, '⚙️ 操作系统: '),
-          React.createElement('strong', { style: { color: '#0f172a' } }, snapshot?.osType || 'Linux')
-        ),
-        React.createElement('div', {},
           React.createElement('span', { style: { color: '#64748b' } }, '💾 物理内存利用率: '),
-          React.createElement('strong', { style: { color: isHighMem ? '#ef4444' : '#10b981' } }, `${snapshot?.memoryUsedPercent || 0}%`)
+          React.createElement('strong', { style: { color: isHighMem ? '#ef4444' : '#10b981' } }, `${snapshot?.memoryUsedPercent != null ? snapshot.memoryUsedPercent : 0}%`)
         ),
         React.createElement('div', {},
           React.createElement('span', { style: { color: '#64748b' } }, '⚡ 系统 CPU 负载: '),
-          React.createElement('strong', { style: { color: isHighCpu ? '#ef4444' : '#0f172a' } }, `${snapshot?.cpuLoadPercent || 0}%`)
+          React.createElement('strong', { style: { color: isHighCpu ? '#ef4444' : '#0f172a' } }, `${cpuVal}%`)
         ),
         React.createElement('div', {},
           React.createElement('span', { style: { color: '#64748b' } }, '⏱️ 采样时间: '),
@@ -1471,6 +1654,7 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
         )
       ),
 
+      // 能耗分类分布进度条 (Category Energy Breakdown)
       React.createElement('div', { style: { marginBottom: 18 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
           React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#334155' } }, '📊 整机物理内存能耗分类透视'),
@@ -1514,6 +1698,7 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
         )
       ),
 
+      // Top 15 进程排行榜表格
       React.createElement('div', {},
         React.createElement('div', {
           style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8 }
@@ -1536,7 +1721,7 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
               React.createElement('tr', {},
                 React.createElement('th', { style: { width: 70 } }, 'PID'),
                 React.createElement('th', { style: { width: 120 } }, '能耗分类'),
-                React.createElement('th', { style: { width: 130 } }, '进程名 (COMM)'),
+                React.createElement('th', { style: { width: 140 } }, '进程名 (COMM)'),
                 React.createElement('th', { style: { width: 80 } }, '用户'),
                 React.createElement('th', { style: { width: 100 } }, '物理内存 (RSS)'),
                 React.createElement('th', { style: { width: 70 } }, '内存%'),
@@ -1549,6 +1734,8 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
                 ? React.createElement('tr', {}, React.createElement('td', { colSpan: 8, className: 'empty' }, '未发现匹配的运行进程'))
                 : procs.map((p, idx) => {
                     const isExpanded = expandedCmdPid === p.pid;
+                    const pName = p.processName || p.name || '-';
+                    const cmd = p.commandLine || p.command || pName;
                     return React.createElement('tr', { key: p.pid || idx },
                       React.createElement('td', { style: { fontFamily: 'monospace', fontWeight: 600 } }, p.pid),
                       React.createElement('td', {},
@@ -1557,7 +1744,7 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
                           style: { fontSize: 11, padding: '2px 6px', borderRadius: 4 }
                         }, p.categoryLabel || p.category)
                       ),
-                      React.createElement('td', { style: { fontWeight: 600, color: '#0f172a' } }, p.processName || '-'),
+                      React.createElement('td', { style: { fontWeight: 600, color: '#0f172a' } }, pName),
                       React.createElement('td', { style: { color: '#64748b' } }, p.user || '-'),
                       React.createElement('td', { style: { fontWeight: 700, color: (p.memoryPercent || 0) > 20 ? '#ef4444' : '#0f172a' } },
                         p.memoryFormatted || '0 B'
@@ -1580,8 +1767,8 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
                         onClick: () => setExpandedCmdPid(isExpanded ? null : p.pid)
                       },
                         isExpanded
-                          ? React.createElement('div', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f1f5f9', padding: 6, borderRadius: 4 } }, p.commandLine || p.processName)
-                          : React.createElement('div', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, p.commandLine || p.processName)
+                          ? React.createElement('div', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f1f5f9', padding: 6, borderRadius: 4 } }, cmd)
+                          : React.createElement('div', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, cmd)
                       )
                     );
                   })
@@ -1590,6 +1777,7 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
         )
       ),
 
+      // Footer
       React.createElement('div', {
         style: {
           display: 'flex',
@@ -1602,7 +1790,7 @@ function ProcessRcaModal({ visible, hostName, onClose }) {
           color: '#64748b'
         }
       },
-        React.createElement('span', {}, '💡 提示：本诊断穿透 Linux / Windows 操作系统内核进程表毫秒级无感采集，无需为 Python/ES 额外安装任何探针。'),
+        React.createElement('span', {}, '💡 提示：本诊断穿透 Linux / Windows 内核进程调度毫秒级无感采集，无需为 Python/ES 额外安装任何探针。'),
         React.createElement('button', {
           className: 'btn',
           onClick: onClose
@@ -1617,11 +1805,15 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
   const [range, setRange] = useState('1h');
   const [hosts, setHosts] = useState([]);
   const [dashData, setDashData] = useState({});
+  const [crimeScenes, setCrimeScenes] = useState([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     api('/api/v1/system-metrics/hosts').then(r => {
       setHosts(r?.data || []);
+    }).catch(() => {});
+    api('/api/v1/system-metrics/crime-scene-snapshots').then(r => {
+      setCrimeScenes(r?.data || []);
     }).catch(() => {});
   }, []);
 
@@ -1647,8 +1839,8 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
   const summary = dashData?.summary || {};
   const timeline = dashData?.timeline || [];
   const cpuTrend = dashData?.cpuTrend || {};
-  const memTrend = dashData?.memTrend || {};
-  const probeTrend = dashData?.probeTrend || {};
+  const memTrend = dashData?.memTrend || dashData?.memoryTrend || {};
+  const probeTrend = dashData?.probeTrend || dashData?.throughputTrend || {};
   const incidentTrend = dashData?.incidentTrend || {};
 
   const formatGbOrMb = (bytes) => {
@@ -1668,7 +1860,9 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
   const usedMemBytes = summary.usedMemBytes || 0;
   const totalMemBytes = summary.totalMemBytes || 0;
 
-  const todayProbeCalls = summary.todayProbeCalls || 0;
+  const todayTotalCalls = summary.todayTotalCalls || summary.todayProbeCalls || 0;
+  const todayHttpRequests = summary.todayHttpRequests || 0;
+  const avgCostMs = summary.avgCostMs || 0;
   const probeSuccessRate = summary.probeSuccessRate != null ? summary.probeSuccessRate : 100;
   const todaySlowSqls = summary.todaySlowSqls || 0;
   const unackedAlerts = summary.unackedAlerts || 0;
@@ -1708,6 +1902,24 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
       ),
 
       React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+        crimeScenes.length > 0 && React.createElement('button', {
+          className: 'btn small',
+          style: {
+            background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)',
+            color: '#ffffff',
+            borderColor: '#b91c1c',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            boxShadow: '0 2px 4px rgba(220,38,38,0.2)'
+          },
+          onClick: () => onOpenProcessRca && onOpenProcessRca(hostName === 'ALL' ? '' : hostName, 'crimescene'),
+          title: '查看历史内存或CPU暴涨瞬间自动留存的黑匣子案发现场快照'
+        },
+          React.createElement('span', { style: { fontSize: 14 } }, '🚨'),
+          `暴涨案发现场 (${crimeScenes.length})`
+        ),
         React.createElement('button', {
           className: 'btn small',
           style: {
@@ -1720,7 +1932,7 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
             gap: 6,
             boxShadow: '0 2px 4px rgba(37,99,235,0.2)'
           },
-          onClick: () => onOpenProcessRca && onOpenProcessRca(hostName === 'ALL' ? '' : hostName),
+          onClick: () => onOpenProcessRca && onOpenProcessRca(hostName === 'ALL' ? '' : hostName, 'realtime'),
           title: '穿透排查全机所有操作系统进程与内存/CPU暴涨根因（如 Python、ES 与后台进程）'
         },
           React.createElement('span', { style: { fontSize: 14 } }, '⚡'),
@@ -1735,6 +1947,7 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
     ),
 
     React.createElement('div', { className: 'dashboard-kpi-grid' },
+      // Card 1
       React.createElement('div', { className: 'dashboard-kpi-card' },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🖥️ 活跃集群节点'),
@@ -1752,6 +1965,7 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
         )
       ),
 
+      // Card 2
       React.createElement('div', { className: 'dashboard-kpi-card' },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '⚡ 实时系统算力'),
@@ -1769,6 +1983,7 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
         )
       ),
 
+      // Card 3
       React.createElement('div', { className: 'dashboard-kpi-card' },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '💾 物理内存负载'),
@@ -1786,42 +2001,50 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
         )
       ),
 
+      // Card 4
       React.createElement('div', { className: 'dashboard-kpi-card' },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🚀 今日巡检吞吐'),
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🚀 今日吞吐与耗时'),
           React.createElement('span', {
             className: 'badge ' + (probeSuccessRate >= 95 ? 'green' : 'red'),
             style: { fontSize: 10, padding: '1px 6px' }
           }, `成功率 ${probeSuccessRate}%`)
         ),
         React.createElement('div', { style: { fontSize: 24, fontWeight: 700, color: '#0f172a', marginTop: 4 } },
-          todayProbeCalls,
+          todayTotalCalls,
           React.createElement('span', { style: { fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 4 } }, '次')
         ),
         React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4 } },
-          `持续高频保活 · 成功率 ${probeSuccessRate}%`
+          `业务请求: ${todayHttpRequests} 次 · 均耗时: ${avgCostMs}ms`
         )
       ),
 
+      // Card 5
       React.createElement('div', { className: 'dashboard-kpi-card' },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🐢 异常事件与告警'),
+          React.createElement('span', { style: { fontSize: 12, color: '#64748b', fontWeight: 500 } }, '🐢 异常慢SQL与黑匣子'),
           React.createElement('span', {
             className: 'badge ' + (unackedAlerts > 0 ? 'red' : 'green'),
             style: { fontSize: 10, padding: '1px 6px' }
-          }, unackedAlerts > 0 ? `${unackedAlerts} 条待确认` : '告警已恢复')
+          }, unackedAlerts > 0 ? `${unackedAlerts} 待确认` : '告警正常')
         ),
         React.createElement('div', { style: { fontSize: 24, fontWeight: 700, color: unackedAlerts > 0 ? '#ef4444' : '#10b981', marginTop: 4 } },
           todaySlowSqls,
           React.createElement('span', { style: { fontSize: 13, fontWeight: 400, color: '#64748b', marginLeft: 4 } }, `笔慢SQL / ${unackedAlerts} 告警`)
         ),
-        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4 } },
-          unackedAlerts > 0 ? '⚠️ 存在未确认系统告警需处理' : '✓ 系统暂无未确认隐患'
+        React.createElement('div', { style: { fontSize: 11, color: '#64748b', marginTop: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+          crimeScenes.length > 0
+            ? React.createElement('a', {
+                style: { color: '#ef4444', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' },
+                onClick: () => onOpenProcessRca && onOpenProcessRca(hostName === 'ALL' ? '' : hostName, 'crimescene')
+              }, `🚨 发现 ${crimeScenes.length} 条暴涨黑匣子快照`)
+            : React.createElement('span', {}, '✓ 运行正常，暂无暴涨快照')
         )
       )
     ),
 
     React.createElement('div', { className: 'dashboard-chart-grid' },
+      // Chart 1: CPU 走势
       React.createElement('div', { className: 'dashboard-chart-box' },
         React.createElement('div', { className: 'dashboard-chart-header' },
           React.createElement('div', { className: 'dashboard-chart-title' },
@@ -1850,11 +2073,12 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
         })
       ),
 
+      // Chart 2: 内存走势 (统一按物理 GB 容量呈现，解决%与GB同轴失真问题)
       React.createElement('div', { className: 'dashboard-chart-box' },
         React.createElement('div', { className: 'dashboard-chart-header' },
           React.createElement('div', { className: 'dashboard-chart-title' },
             React.createElement('span', {}, '💾'),
-            '物理内存占用与外部进程走势',
+            '物理内存占用与跨进程消耗 (GB)',
             React.createElement('span', {
               style: { fontSize: 11, color: '#ea580c', background: '#ffedd5', padding: '1px 6px', borderRadius: 4, marginLeft: 6, fontWeight: 500 }
             }, '🔥 穿透同机 Python / ES')
@@ -1862,44 +2086,49 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
           React.createElement('div', { className: 'dashboard-chart-legend' },
             React.createElement('div', { className: 'legend-item' },
               React.createElement('span', { className: 'legend-dot', style: { background: '#8b5cf6' } }),
-              '整机内存率 (%)'
+              '整机已用内存 (GB)'
             ),
             React.createElement('div', { className: 'legend-item' },
               React.createElement('span', { className: 'legend-dot', style: { background: '#ea580c' } }),
-              '外部进程 (GB)'
+              '外部进程 (Python/ES等)'
             ),
             React.createElement('div', { className: 'legend-item' },
               React.createElement('span', { className: 'legend-dot', style: { background: '#06b6d4' } }),
-              'JVM 进程 (GB)'
+              'JVM 业务内存'
             )
           )
         ),
         React.createElement(SvgTrendChart, {
           timeline,
-          unit: '',
+          unit: ' GB',
           height: 220,
           series: [
-            { name: '整机内存率', color: '#8b5cf6', fill: true, unit: '%', data: memTrend?.memPercent || [] },
-            { name: '外部进程(Python/ES等)', color: '#ea580c', fill: false, unit: ' GB', data: memTrend?.externalUsedGb || [] },
+            { name: '整机已用物理内存', color: '#8b5cf6', fill: true, unit: ' GB', data: memTrend?.usedMemGb || [] },
+            { name: '外部进程消耗(Python/ES等)', color: '#ea580c', fill: false, unit: ' GB', data: memTrend?.externalUsedGb || [] },
             { name: 'JVM 业务内存', color: '#06b6d4', fill: false, unit: ' GB', data: memTrend?.jvmUsedGb || [] }
           ]
         })
       ),
 
+      // Chart 3: 业务请求与接口巡检走势 (RPM)
       React.createElement('div', { className: 'dashboard-chart-box' },
         React.createElement('div', { className: 'dashboard-chart-header' },
           React.createElement('div', { className: 'dashboard-chart-title' },
             React.createElement('span', {}, '🚀'),
-            '业务接口巡检与错误频次走势'
+            '业务流量 (RPM) 与巡检探活走势'
           ),
           React.createElement('div', { className: 'dashboard-chart-legend' },
             React.createElement('div', { className: 'legend-item' },
               React.createElement('span', { className: 'legend-dot', style: { background: '#3b82f6' } }),
-              '巡检调用量 (次/分)'
+              '业务调用 (RPM)'
+            ),
+            React.createElement('div', { className: 'legend-item' },
+              React.createElement('span', { className: 'legend-dot', style: { background: '#06b6d4' } }),
+              '接口探活'
             ),
             React.createElement('div', { className: 'legend-item' },
               React.createElement('span', { className: 'legend-dot', style: { background: '#ef4444' } }),
-              '异常失败量 (次/分)'
+              '异常与5xx'
             )
           )
         ),
@@ -1908,12 +2137,14 @@ function DashboardTab({ isViewer, onOpenProcessRca }) {
           unit: ' 次',
           height: 220,
           series: [
-            { name: '巡检调用量', color: '#3b82f6', fill: true, unit: ' 次', data: probeTrend?.totalCalls || [] },
-            { name: '异常失败量', color: '#ef4444', fill: false, unit: ' 次', data: probeTrend?.errorCalls || [] }
+            { name: '业务调用总量', color: '#3b82f6', fill: true, unit: ' 次', data: probeTrend?.totalCalls || [] },
+            { name: '接口探活巡检', color: '#06b6d4', fill: false, unit: ' 次', data: probeTrend?.probeCalls || [] },
+            { name: '异常与5xx报错', color: '#ef4444', fill: false, unit: ' 次', data: probeTrend?.errorCalls || [] }
           ]
         })
       ),
 
+      // Chart 4: 慢 SQL 笔数与告警事件频次分布
       React.createElement('div', { className: 'dashboard-chart-box' },
         React.createElement('div', { className: 'dashboard-chart-header' },
           React.createElement('div', { className: 'dashboard-chart-title' },
@@ -4863,6 +5094,7 @@ function App() {
   const [tab, setTab] = useState('dashboard');
   const [showRcaModal, setShowRcaModal] = useState(false);
   const [rcaHostName, setRcaHostName] = useState('ALL');
+  const [rcaMode, setRcaMode] = useState('realtime');
   const [apps, setApps] = useState([]);
   const [currentApp, setCurrentApp] = useState(null);
   const [dashData, setDashData] = useState({});
@@ -4978,11 +5210,11 @@ function App() {
           }, v))),
       tab === 'dashboard' && React.createElement(DashboardTab, {
         isViewer,
-        onOpenProcessRca: (h) => { setRcaHostName(h || 'ALL'); setShowRcaModal(true); }
+        onOpenProcessRca: (h, mode) => { setRcaHostName(h || 'ALL'); setRcaMode(mode || 'realtime'); setShowRcaModal(true); }
       })
       || tab === 'host-system' && React.createElement(HostSystemTab, {
         isViewer,
-        onOpenProcessRca: (h) => { setRcaHostName(h || 'ALL'); setShowRcaModal(true); }
+        onOpenProcessRca: (h, mode) => { setRcaHostName(h || 'ALL'); setRcaMode(mode || 'realtime'); setShowRcaModal(true); }
       })
       || tab === 'probes' && React.createElement(ProbesTab, { isViewer })
       || tab === 'slow-sql' && React.createElement(SlowSqlTab)
@@ -4997,6 +5229,7 @@ function App() {
     React.createElement(ProcessRcaModal, {
       visible: showRcaModal,
       hostName: rcaHostName,
+      initialMode: rcaMode,
       onClose: () => setShowRcaModal(false)
     }),
     React.createElement(SetupWizardModal, {

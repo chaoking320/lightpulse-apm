@@ -38,6 +38,7 @@ public class SystemMetricController {
     private final com.monitor.server.service.EsStorageService esStorageService;
     private final com.monitor.server.repository.ApmHostConfigRepo hostConfigRepo;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final com.monitor.server.service.HostProcessInspector hostProcessInspector;
 
     /** 实时全内存极速缓存：存储各主机最新一条指标 [appName::hostName -> metric]，零延迟零IO保底 */
     public static final Map<String, ApmSystemMetric> LATEST_HOST_METRICS = new java.util.concurrent.ConcurrentHashMap<>();
@@ -248,6 +249,13 @@ public class SystemMetricController {
                 }
             } catch (Exception ignored) {}
         }
+
+        // 3. 自动化案发现场黑匣子抓拍
+        try {
+            if (hostProcessInspector != null) {
+                hostProcessInspector.checkAndCaptureCrimeScene(m, cpuThreshold, memThreshold);
+            }
+        } catch (Exception ignored) {}
     }
 
     private String str(Object val, String def) {

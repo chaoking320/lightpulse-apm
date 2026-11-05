@@ -14,7 +14,7 @@ import java.util.*;
 
 /**
  * 全景趋势监控大屏业务服务
- * 负责集群聚合、单机下钻、CPU/内存/吞吐量/慢SQL/告警多维历史趋势计算
+ * 负责集群聚合、单机下钻、CPU/内存/真实HTTP吞吐量/慢SQL/告警多维历史趋势计算
  */
 @Slf4j
 @Service
@@ -28,6 +28,7 @@ public class DashboardService {
     private final ApmApplicationRepo appRepo;
     private final StorageEngineService storageEngineService;
     private final EsStorageService esStorageService;
+    private final ApmTrafficRecorder trafficRecorder;
 
     private static final DateTimeFormatter TIME_FMT_MIN = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter TIME_FMT_DAY = DateTimeFormatter.ofPattern("MM-dd HH:00");
@@ -76,15 +77,16 @@ public class DashboardService {
 
         // 2. 查询并按时间桶聚合系统指标 (CPU、整机内存、JVM内存、外部进程内存)
         List<ApmSystemMetric> metricList;
+        int queryMinutes = Math.min(minutes, 10080);
         if (storageEngineService.isEsActive()) {
             List<ApmSystemMetric> esList = isCluster
-                    ? esStorageService.queryHostHistory("*", Math.min(minutes, 1440), storageEngineService.getCurrentConfig())
-                    : esStorageService.queryHostHistory(hostName, Math.min(minutes, 1440), storageEngineService.getCurrentConfig());
-            metricList = (esList != null && !esList.isEmpty()) ? esList : systemMetricRepo.selectRecentMetricsForCluster(Math.min(minutes, 1440));
+                    ? esStorageService.queryHostHistory("*", queryMinutes, storageEngineService.getCurrentConfig())
+                    : esStorageService.queryHostHistory(hostName, queryMinutes, storageEngineService.getCurrentConfig());
+            metricList = (esList != null && !esList.isEmpty()) ? esList : systemMetricRepo.selectRecentMetricsForCluster(queryMinutes);
         } else {
             metricList = isCluster
-                    ? systemMetricRepo.selectRecentMetricsForCluster(Math.min(minutes, 1440))
-                    : systemMetricRepo.selectRecentMetrics(hostName, Math.min(minutes, 1440));
+                    ? systemMetricRepo.selectRecentMetricsForCluster(queryMinutes)
+                    : systemMetricRepo.selectRecentMetrics(hostName, queryMinutes);
         }
 
         // 数据为空兜底当前内存中的最新指标
@@ -151,7 +153,7 @@ public class DashboardService {
             externalUsedGbList.add(lastExtGb);
         }
 
-        // 3. 统计巡检与业务接口调用吞吐量 (Calls & Errors)
+        // 3. 统计巡检探活量与真实业务 HTTP 流量 (Calls & Errors)
         int[] probeCalls = new int[bucketCount];
         int[] probeErrors = new int[bucketCount];
         try {
@@ -172,6 +174,20 @@ public class DashboardService {
                 }
             }
         } catch (Exception ignored) {}
+
+        // 聚合真实业务 HTTP 流量
+        Map<String, int[]> trafficStats = (trafficRecorder != null)
+                ? trafficRecorder.aggregateTraffic(since, bucketMinutes, bucketCount)
+                : Map.of("requests", new int[bucketCount], "errors", new int[bucketCount]);
+        int[] realHttpRequests = trafficStats.getOrDefault("requests", new int[bucketCount]);
+        int[] realHttpErrors = trafficStats.getOrDefault("errors", new int[bucketCount]);
+
+        int[] totalApiCalls = new int[bucketCount];
+        int[] totalApiErrors = new int[bucketCount];
+        for (int i = 0; i < bucketCount; i++) {
+            totalApiCalls[i] = realHttpRequests[i] + probeCalls[i];
+            totalApiErrors[i] = realHttpErrors[i] + probeErrors[i];
+        }
 
         // 4. 统计慢 SQL 频次与告警事件频次
         int[] slowSqlCounts = new int[bucketCount];
@@ -198,18 +214,16 @@ public class DashboardService {
             }
             List<ApmAlertRecord> aList = alertRecordRepo.selectList(alertWrapper);
             for (ApmAlertRecord al : aList) {
-                LocalDateTime tTime = al.getTriggeredAt() != null ? al.getTriggeredAt() : now;
-                int idx = findBucketIndex(tTime, since, bucketMinutes, bucketCount);
+                LocalDateTime aTime = al.getTriggeredAt() != null ? al.getTriggeredAt() : now;
+                int idx = findBucketIndex(aTime, since, bucketMinutes, bucketCount);
                 if (idx >= 0 && idx < bucketCount) {
                     alertCounts[idx]++;
                 }
             }
         } catch (Exception ignored) {}
 
-        // 5. 汇总核心 KPI 概要指标
+        // 5. 组合并返回最终全景趋势大屏数据结构
         Map<String, Object> summary = buildSummaryKpis(isCluster, hostName);
-
-        // 6. 组装响应结构
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("hostName", hostName);
         data.put("range", range);
@@ -221,14 +235,28 @@ public class DashboardService {
         ));
         data.put("memoryTrend", Map.of(
                 "systemMemPercent", memPercentList,
+                "memPercent", memPercentList,
                 "usedMemGb", usedMemGbList,
                 "jvmUsedGb", jvmUsedGbList,
                 "externalUsedGb", externalUsedGbList
         ));
-        data.put("throughputTrend", Map.of(
-                "probeCalls", toList(probeCalls),
-                "probeErrors", toList(probeErrors)
+        data.put("memTrend", Map.of(
+                "systemMemPercent", memPercentList,
+                "memPercent", memPercentList,
+                "usedMemGb", usedMemGbList,
+                "jvmUsedGb", jvmUsedGbList,
+                "externalUsedGb", externalUsedGbList
         ));
+
+        Map<String, Object> throughputMap = Map.of(
+                "totalCalls", toList(totalApiCalls),
+                "errorCalls", toList(totalApiErrors),
+                "httpRequests", toList(realHttpRequests),
+                "probeCalls", toList(probeCalls)
+        );
+        data.put("throughputTrend", throughputMap);
+        data.put("probeTrend", throughputMap);
+
         data.put("incidentTrend", Map.of(
                 "slowSqlCounts", toList(slowSqlCounts),
                 "alertCounts", toList(alertCounts)
@@ -288,6 +316,12 @@ public class DashboardService {
         } catch (Exception ignored) {}
         double probeSuccessRate = todayProbeCalls > 0 ? round((double) todayProbeSuccess / todayProbeCalls * 100.0) : 100.0;
 
+        // 今日业务 HTTP 流量统计
+        Map<String, Object> trafficSummary = (trafficRecorder != null) ? trafficRecorder.getTodaySummary() : Map.of();
+        long todayHttpRequests = (trafficSummary.get("totalRequests") instanceof Number n) ? n.longValue() : 0L;
+        double avgCostMs = (trafficSummary.get("avgCostMs") instanceof Number n) ? n.doubleValue() : 0.0;
+        long totalTodayCalls = todayProbeCalls + todayHttpRequests;
+
         // 今日慢 SQL
         long todaySlowSqls = 0;
         try {
@@ -312,6 +346,9 @@ public class DashboardService {
         summary.put("totalMemBytes", totalMemBytes);
         summary.put("usedMemBytes", usedMemBytes);
         summary.put("todayProbeCalls", todayProbeCalls);
+        summary.put("todayHttpRequests", todayHttpRequests);
+        summary.put("todayTotalCalls", totalTodayCalls);
+        summary.put("avgCostMs", avgCostMs);
         summary.put("probeSuccessRate", probeSuccessRate);
         summary.put("todaySlowSqls", todaySlowSqls);
         summary.put("unackedAlerts", unackedAlerts);

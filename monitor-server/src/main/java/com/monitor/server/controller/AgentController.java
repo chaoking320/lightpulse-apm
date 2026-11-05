@@ -131,7 +131,8 @@ public class AgentController {
             Map<String, ApmEndpointMetric> aggMap = new LinkedHashMap<>();
 
             for (Map<String,Object> m : metrics) {
-                appName = str(m.get("appName"));
+                String itemApp = str(m.get("appName"));
+                appName = itemApp;
                 String className = str(m.get("className"));
                 String methodName = str(m.get("methodName"));
                 long timestamp = m.get("timestamp") instanceof Number
@@ -148,7 +149,7 @@ public class AgentController {
 
                 ApmEndpointMetric agg = aggMap.computeIfAbsent(key, k -> {
                     ApmEndpointMetric em = new ApmEndpointMetric();
-                    em.setAppName(appName);
+                    em.setAppName(itemApp);
                     em.setClassName(className);
                     em.setMethodName(methodName);
                     em.setBucketMinute(bucket);

@@ -23,18 +23,24 @@ public interface ApmSystemMetricRepo extends BaseMapper<ApmSystemMetric> {
     """)
     List<ApmSystemMetric> selectLatestForEachHost();
 
-    /** 获取指定主机最近 N 分钟内的历史指标数据 */
+    /** 获取指定主机最近 N 分钟内的历史指标数据 (排除大文本字段，极速低开销) */
     @Select("""
-        SELECT * FROM apm_system_metric
+        SELECT id, app_name, host_name, ip_address, env, system_cpu_load, process_cpu_load,
+               total_physical_memory, free_physical_memory, memory_used_percent,
+               jvm_total_memory, jvm_used_memory, uptime_seconds, created_at
+        FROM apm_system_metric
         WHERE (host_name = #{hostName} OR app_name = #{hostName} OR ip_address = #{hostName})
           AND created_at >= DATE_SUB(NOW(), INTERVAL #{minutes} MINUTE)
         ORDER BY created_at ASC
     """)
     List<ApmSystemMetric> selectRecentMetrics(@Param("hostName") String hostName, @Param("minutes") int minutes);
 
-    /** 获取全集群在最近 N 分钟内的历史指标数据 */
+    /** 获取全集群在最近 N 分钟内的历史指标数据 (排除大文本字段，极速低开销) */
     @Select("""
-        SELECT * FROM apm_system_metric
+        SELECT id, app_name, host_name, ip_address, env, system_cpu_load, process_cpu_load,
+               total_physical_memory, free_physical_memory, memory_used_percent,
+               jvm_total_memory, jvm_used_memory, uptime_seconds, created_at
+        FROM apm_system_metric
         WHERE created_at >= DATE_SUB(NOW(), INTERVAL #{minutes} MINUTE)
         ORDER BY created_at ASC
     """)

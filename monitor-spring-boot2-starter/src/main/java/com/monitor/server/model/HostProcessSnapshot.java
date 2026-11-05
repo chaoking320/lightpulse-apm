@@ -1,5 +1,6 @@
 package com.monitor.server.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -27,4 +28,17 @@ public class HostProcessSnapshot {
     private String diagnosis;
     private List<Map<String, Object>> categoryBreakdown;
     private List<HostProcessInfo> topProcesses;
+
+    // 案发现场黑匣子扩展
+    private Boolean isCrimeScene;
+    private String crimeSceneReason;
+
+    @JsonProperty("cpuLoadPercent")
+    public Double getCpuLoadPercent() {
+        return systemCpuLoad;
+    }
+
+    public void setCpuLoadPercent(Double cpuLoadPercent) {
+        this.systemCpuLoad = cpuLoadPercent;
+    }
 }
