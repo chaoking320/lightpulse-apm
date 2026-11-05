@@ -51,6 +51,16 @@ public class DashboardController {
         return Map.of("code", 200, "data", hostProcessInspector.getCrimeSceneSnapshots());
     }
 
+    /**
+     * 控制台：手动演练触发抓拍一条案发现场快照（方便测试验收）
+     */
+    @PostMapping("/system-metrics/crime-scene-snapshots/trigger-test")
+    public Map<String, Object> triggerTestCrimeScene(
+            @RequestParam(value = "hostName", required = false) String hostName) {
+        return Map.of("code", 200, "message", "已成功模拟抓拍一条案发现场快照", "data", hostProcessInspector.triggerManualCrimeScene(hostName));
+    }
+
+
 
     /** 应用概览 */
     @GetMapping("/apps")

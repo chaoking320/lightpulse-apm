@@ -433,6 +433,22 @@ public class HostProcessInspector {
         }
     }
 
+        /**
+     * 手动/演练触发抓拍一条案发现场快照（方便自测与功能验收）
+     */
+    public HostProcessSnapshot triggerManualCrimeScene(String requestedHost) {
+        HostProcessSnapshot snapshot = captureSnapshot(requestedHost);
+        snapshot.setIsCrimeScene(true);
+        snapshot.setCrimeSceneReason(String.format("手动演练模拟抓拍 (内存 %.1f%%, CPU %.1f%%)",
+                snapshot.getMemoryUsedPercent() != null ? snapshot.getMemoryUsedPercent() : 0.0,
+                snapshot.getSystemCpuLoad() != null ? snapshot.getSystemCpuLoad() : 0.0));
+        crimeSceneSnapshots.addFirst(snapshot);
+        while (crimeSceneSnapshots.size() > 30) {
+            crimeSceneSnapshots.pollLast();
+        }
+        return snapshot;
+    }
+
     public List<HostProcessSnapshot> getCrimeSceneSnapshots() {
         return new ArrayList<>(crimeSceneSnapshots);
     }
