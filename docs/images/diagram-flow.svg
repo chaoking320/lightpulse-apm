@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 390" width="1000" height="390" font-family="'PingFang SC','Microsoft YaHei','Noto Sans SC',sans-serif">
+  <rect width="1000" height="440" fill="#FBFAF6"/>
+
+  <text x="60" y="46" font-size="15" letter-spacing="3" fill="#9A9484">一条只有出站的链路</text>
+
+  <!-- 左：被监控主机 -->
+  <rect x="60" y="86" width="270" height="286" fill="#F4EFE4" rx="2"/>
+  <text x="82" y="118" font-size="13" letter-spacing="1" fill="#A8442A">被监控主机</text>
+  <text x="82" y="140" font-size="11.5" fill="#8A8578">零监听端口 · 零本地依赖</text>
+
+  <rect x="82" y="158" width="226" height="44" fill="#FFFFFF" stroke="#E0D9C8"/>
+  <text x="96" y="176" font-size="12" fill="#3C5560">业务 JVM（原有进程）</text>
+  <text x="96" y="193" font-size="11" fill="#8A8578">ByteBuddy 增强 / 或不增强</text>
+
+  <rect x="82" y="212" width="226" height="44" fill="#FFFFFF" stroke="#E0D9C8"/>
+  <text x="96" y="230" font-size="12" fill="#3C5560">Agent 采集线程</text>
+  <text x="96" y="247" font-size="11" fill="#8A8578">CPU / 内存 / 全部分区 / 探针</text>
+
+  <rect x="82" y="266" width="226" height="44" fill="#FFFFFF" stroke="#E0D9C8"/>
+  <text x="96" y="284" font-size="12" fill="#3C5560">本地缓冲队列</text>
+  <text x="96" y="301" font-size="11" fill="#8A8578">上报失败不阻塞业务</text>
+
+  <text x="82" y="340" font-size="11.5" fill="#A8442A">✕ 无 ServerSocket</text>
+  <text x="82" y="358" font-size="11" fill="#8A8578">内网不需要为监控开任何入站端口</text>
+
+  <!-- 中间：单向箭头 -->
+  <line x1="340" y1="240" x2="470" y2="240" stroke="#A8442A" stroke-width="1.6"/>
+  <polygon points="474,240 462,234 462,246" fill="#A8442A"/>
+  <text x="405" y="222" font-size="11.5" fill="#A8442A" text-anchor="middle">HTTP POST</text>
+  <text x="405" y="264" font-size="11" fill="#8A8578" text-anchor="middle">60s</text>
+  <text x="405" y="282" font-size="11" fill="#8A8578" text-anchor="middle">只出站</text>
+
+  <!-- 右：服务端 -->
+  <rect x="486" y="86" width="454" height="286" fill="#EEF1F2" rx="2"/>
+  <text x="508" y="118" font-size="13" letter-spacing="1" fill="#3C5560">Monitor Server</text>
+  <text x="508" y="140" font-size="11.5" fill="#8A8578">同时回收配置：Agent 每 60s 拉一次热更新</text>
+
+  <rect x="508" y="158" width="410" height="40" fill="#FFFFFF" stroke="#D5DDE0"/>
+  <text x="522" y="183" font-size="12" fill="#3C5560">接收 / 注册 / 心跳 → 在线表</text>
+
+  <rect x="508" y="204" width="410" height="40" fill="#FFFFFF" stroke="#D5DDE0"/>
+  <text x="522" y="229" font-size="12" fill="#3C5560">存储引擎：嵌入式 / MySQL / 纯 ES / 混合</text>
+
+  <rect x="508" y="250" width="196" height="40" fill="#FFFFFF" stroke="#D5DDE0"/>
+  <text x="522" y="275" font-size="12" fill="#3C5560">阈值判定 + 静默窗口</text>
+
+  <rect x="722" y="250" width="196" height="40" fill="#FFFFFF" stroke="#D5DDE0"/>
+  <text x="736" y="275" font-size="12" fill="#3C5560">钉钉 / 企微 / 飞书</text>
+
+  <text x="508" y="318" font-size="11.5" fill="#8A8578">指标索引按天滚动</text>
+  <text x="508" y="336" font-size="11" fill="#8A8578">metrics-2026.11.01 · probes-2026.11.01</text>
+  <text x="508" y="354" font-size="11" fill="#8A8578">保留 30 天，凌晨 03:30 整索引丢弃</text>
+
+</svg>

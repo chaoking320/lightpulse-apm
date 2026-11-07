@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <!-- Background Gradients -->
+    <radialGradient id="lp-bg-glow" cx="75%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#064e3b" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#082f49" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#060709" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lp-ambient" cx="30%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0284c7" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#060709" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Text Gradients -->
+    <linearGradient id="lp-text-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="60%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#6ee7b7"/>
+    </linearGradient>
+
+    <linearGradient id="lp-line-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.05"/>
+      <stop offset="30%" stop-color="#38bdf8" stop-opacity="0.7"/>
+      <stop offset="50%" stop-color="#34d399" stop-opacity="1"/>
+      <stop offset="70%" stop-color="#38bdf8" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0.05"/>
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="lp-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <filter id="text-glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <!-- Precision Grid -->
+    <pattern id="lp-grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M 48 0 L 0 0 0 48" fill="none" stroke="rgba(255,255,255,0.028)" stroke-width="1"/>
+      <circle cx="0" cy="0" r="1" fill="rgba(255,255,255,0.12)"/>
+    </pattern>
+  </defs>
+
+  <!-- Deep Obsidian Canvas -->
+  <rect width="1200" height="630" fill="#060709"/>
+  <rect width="1200" height="630" fill="url(#lp-bg-glow)"/>
+  <rect width="1200" height="630" fill="url(#lp-ambient)"/>
+  <rect width="1200" height="630" fill="url(#lp-grid)"/>
+
+  <!-- Giant Background Architectural Watermark -->
+  <g opacity="0.035">
+    <text x="75" y="360" font-family="'Inter', -apple-system, BlinkMacSystemFont, sans-serif" font-size="210" font-weight="900" fill="#ffffff" letter-spacing="-6">
+      PULSE
+    </text>
+  </g>
+
+  <!-- Dual Precision Borders -->
+  <rect x="20" y="20" width="1160" height="590" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1" rx="4"/>
+  <rect x="24" y="24" width="1152" height="582" fill="none" stroke="rgba(52,211,153,0.15)" stroke-width="1" rx="2"/>
+
+  <!-- Ethereal Mountain Peak Silhouette (Song Dynasty Far Hills) -->
+  <path d="M20,530 Q240,430 420,470 T820,410 T1180,510 L1180,610 L20,610 Z" fill="#0b1017" opacity="0.75"/>
+  <path d="M20,565 Q320,480 600,520 T1020,465 T1180,555 L1180,610 L20,610 Z" fill="#0e1724" opacity="0.6"/>
+
+  <!-- Telemetry ECG Pulse Line -->
+  <g filter="url(#lp-glow)">
+    <path d="M 24,500 L 360,500 L 380,500 L 395,480 L 410,522 L 425,415 L 440,545 L 455,490 L 470,505 L 485,500 L 860,500 L 875,475 L 890,525 L 905,435 L 920,530 L 935,500 L 1176,500"
+          fill="none" stroke="url(#lp-line-grad)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <circle cx="425" cy="415" r="4.5" fill="#34d399" filter="url(#lp-glow)"/>
+  <circle cx="905" cy="435" r="4" fill="#38bdf8" filter="url(#lp-glow)"/>
+
+  <!-- Top Metadata Brow -->
+  <g transform="translate(80, 88)">
+    <rect x="0" y="0" width="8" height="8" fill="#34d399"/>
+    <text x="20" y="8" font-family="'JetBrains Mono', Consolas, monospace" font-size="12" font-weight="600" fill="#34d399" letter-spacing="3">SHANYI·AI · OPEN SOURCE 02 · OBSERVABILITY</text>
+  </g>
+
+  <!-- ==============================================================
+       HERO TYPOGRAPHY: MASSIVE ENGLISH PRODUCT NAME
+       ============================================================== -->
+  <g transform="translate(80, 218)">
+    <!-- Ambient Glow beneath title -->
+    <text x="0" y="0" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Montserrat', sans-serif" font-size="112" font-weight="900" fill="#34d399" opacity="0.15" filter="url(#text-glow)" letter-spacing="-3">
+      LightPulse
+    </text>
+    <!-- Crisp Foreground Text with Gradient Accent -->
+    <text x="0" y="0" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Montserrat', sans-serif" font-size="112" font-weight="900" fill="#ffffff" letter-spacing="-3">
+      Light<tspan fill="url(#lp-text-grad)">Pulse</tspan>
+    </text>
+    <!-- Tech Badge suffix -->
+    <g transform="translate(585, -82)">
+      <rect x="0" y="0" width="76" height="34" rx="4" fill="rgba(56,189,248,0.12)" stroke="rgba(56,189,248,0.3)" stroke-width="1"/>
+      <text x="14" y="22" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="700" fill="#38bdf8" letter-spacing="1">APM</text>
+    </g>
+  </g>
+
+  <!-- Chinese Poetic Philosophy Subtitle -->
+  <g transform="translate(84, 276)">
+    <text x="0" y="0" font-family="'Noto Serif SC', 'Songti SC', serif" font-size="28" font-weight="400" fill="#e2e8f0" letter-spacing="2">
+      听见脉搏，而不惊动它
+    </text>
+    <text x="320" y="-3" font-family="'Noto Sans SC', sans-serif" font-size="15" font-weight="300" fill="#64748b" letter-spacing="1">
+      —— 专为中微型架构打造的极轻量监控系统
+    </text>
+  </g>
+
+  <!-- Key Architecture Badges -->
+  <g transform="translate(80, 335)">
+    <rect x="0" y="0" width="138" height="34" rx="4" fill="rgba(56,189,248,0.08)" stroke="rgba(56,189,248,0.25)" stroke-width="1"/>
+    <text x="14" y="21" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#7dd3fc">内存 &lt; 25MB</text>
+
+    <rect x="150" y="0" width="170" height="34" rx="4" fill="rgba(52,211,153,0.08)" stroke="rgba(52,211,153,0.25)" stroke-width="1"/>
+    <text x="164" y="21" font-family="'Noto Sans SC', sans-serif" font-size="12" fill="#6ee7b7">只出不进 · 零监听端口</text>
+
+    <rect x="332" y="0" width="198" height="34" rx="4" fill="rgba(244,114,182,0.08)" stroke="rgba(244,114,182,0.25)" stroke-width="1"/>
+    <text x="346" y="21" font-family="'Noto Sans SC', sans-serif" font-size="12" fill="#f472b6">采集 60s · 失联 600s 告警</text>
+
+    <rect x="542" y="0" width="156" height="34" rx="4" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+    <text x="556" y="21" font-family="'Noto Sans SC', sans-serif" font-size="12" fill="#94a3b8">Spring Boot 即插即用</text>
+  </g>
+
+  <!-- Right Vermilion Seal Stamp (朱砂印：脉) -->
+  <g transform="translate(1035, 75)">
+    <circle cx="48" cy="48" r="44" fill="#c84b31" opacity="0.95"/>
+    <circle cx="48" cy="48" r="41" fill="none" stroke="#fecaca" stroke-width="1.5" opacity="0.85"/>
+    <text x="48" y="62" font-family="'Noto Serif SC', 'STKaiti', 'Songti SC', serif" font-size="40" font-weight="bold" text-anchor="middle" fill="#ffffff" letter-spacing="1">
+      脉
+    </text>
+  </g>
+
+  <!-- Bottom Footnote Coordinates -->
+  <g transform="translate(80, 565)">
+    <text x="0" y="0" font-family="'JetBrains Mono', Consolas, monospace" font-size="12" fill="#64748b" letter-spacing="2">
+      2026 · SHANGHAI · shanyiai.site/article/lightpulse-apm
+    </text>
+    <text x="1040" y="0" font-family="'JetBrains Mono', Consolas, monospace" font-size="12" fill="#34d399" text-anchor="end" letter-spacing="1">
+      ✦ LIGHTPULSE AGENT v1.8
+    </text>
+  </g>
+</svg>
