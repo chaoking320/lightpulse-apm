@@ -12,11 +12,21 @@ import com.monitor.server.service.StorageEngineService;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.regex.Pattern;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -284,7 +294,7 @@ public class LogController {
     // ==========================================
 
     /**
-     * 多条件搜索日志列表
+     * 多条件搜索日志列表（支持多级别逗号分隔、排除关键词）
      */
     @GetMapping("/logs/search")
     public Map<String, Object> searchLogs(
@@ -295,25 +305,18 @@ public class LogController {
             @RequestParam(value = "logLevel", required = false) String logLevel,
             @RequestParam(value = "traceId", required = false) String traceId,
             @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "excludeKeyword", required = false) String excludeKeyword,
             @RequestParam(value = "startTime", required = false) String startTime,
             @RequestParam(value = "endTime", required = false) String endTime,
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "size", defaultValue = "50") int size) {
 
         if (storageEngineService.isEsActive()) {
-            return esStorageService.queryLogs(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, startTime, endTime, page, size, storageEngineService.getCurrentConfig());
+            return esStorageService.queryLogs(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, excludeKeyword, startTime, endTime, page, size, storageEngineService.getCurrentConfig());
         }
 
-        // MySQL / H2 模式查询
-        var query = new LambdaQueryWrapper<ApmLogRecord>();
-        if (appName != null && !appName.isBlank() && !"*".equals(appName)) query.eq(ApmLogRecord::getAppName, appName.trim());
-        if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) query.eq(ApmLogRecord::getHostName, hostName.trim());
-        if (logPath != null && !logPath.isBlank()) query.eq(ApmLogRecord::getLogPath, logPath.trim());
-        if (logLevel != null && !logLevel.isBlank() && !"ALL".equalsIgnoreCase(logLevel)) query.eq(ApmLogRecord::getLogLevel, logLevel.trim().toUpperCase());
-        if (traceId != null && !traceId.isBlank()) query.eq(ApmLogRecord::getTraceId, traceId.trim());
-        if (keyword != null && !keyword.isBlank()) query.like(ApmLogRecord::getContent, keyword.trim());
-
-        query.orderByDesc(ApmLogRecord::getId);
+        var query = buildMysqlLogQuery(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, excludeKeyword, startTime, endTime);
+        query.orderByDesc(ApmLogRecord::getCreatedAt).orderByDesc(ApmLogRecord::getId);
 
         long total = logRecordRepo.selectCount(query);
         var pageReq = new Page<ApmLogRecord>(page, size);
@@ -329,24 +332,132 @@ public class LogController {
     }
 
     /**
-     * 日志时间分布柱状图（对标 Loki Log Volume）
+     * 日志时间分布柱状图（兼容 ES 与 H2/MySQL 本地模式）
      */
     @GetMapping("/logs/histogram")
     public Map<String, Object> getLogHistogram(
             @RequestParam(value = "appName", required = false) String appName,
             @RequestParam(value = "hostName", required = false) String hostName,
             @RequestParam(value = "logPath", required = false) String logPath,
+            @RequestParam(value = "logLevel", required = false) String logLevel,
             @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "excludeKeyword", required = false) String excludeKeyword,
             @RequestParam(value = "startTime", required = false) String startTime,
             @RequestParam(value = "endTime", required = false) String endTime,
             @RequestParam(value = "interval", defaultValue = "1m") String interval) {
 
         if (storageEngineService.isEsActive()) {
-            return esStorageService.queryLogHistogram(appName, hostName, logPath, keyword, startTime, endTime, interval, storageEngineService.getCurrentConfig());
+            return esStorageService.queryLogHistogram(appName, hostName, logPath, logLevel, keyword, excludeKeyword, startTime, endTime, interval, storageEngineService.getCurrentConfig());
         }
 
-        // 简易返回空集合
-        return Map.of("code", 200, "buckets", Collections.emptyList());
+        var query = buildMysqlLogQuery(appName, hostName, null, logPath, logLevel, null, keyword, excludeKeyword,
+                (startTime == null || startTime.isBlank()) ? "now-1h" : startTime,
+                (endTime == null || endTime.isBlank()) ? "now" : endTime);
+        query.select(ApmLogRecord::getLogLevel, ApmLogRecord::getCreatedAt);
+        List<ApmLogRecord> records = logRecordRepo.selectList(query);
+        List<Map<String, Object>> buckets = buildLocalHistogramBuckets(records, startTime, endTime, interval, LocalDateTime.now());
+        return Map.of("code", 200, "buckets", buckets);
+    }
+
+    /**
+     * 错误指纹聚类排行（自动脱敏动态数字/IP/UUID/时间戳，归并同类报错）
+     */
+    @GetMapping("/logs/patterns")
+    public Map<String, Object> getLogPatterns(
+            @RequestParam(value = "appName", required = false) String appName,
+            @RequestParam(value = "hostName", required = false) String hostName,
+            @RequestParam(value = "logPath", required = false) String logPath,
+            @RequestParam(value = "logLevel", required = false) String logLevel,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "excludeKeyword", required = false) String excludeKeyword,
+            @RequestParam(value = "startTime", required = false) String startTime,
+            @RequestParam(value = "endTime", required = false) String endTime,
+            @RequestParam(value = "limit", defaultValue = "20") int limit) {
+
+        String effectiveLevels = (logLevel == null || logLevel.isBlank() || "ALL".equalsIgnoreCase(logLevel.trim()))
+                ? "ERROR,WARN" : logLevel;
+        List<ApmLogRecord> records = fetchLogsBatch(appName, hostName, null, logPath, effectiveLevels, null,
+                keyword, excludeKeyword, startTime, endTime, 500);
+        List<Map<String, Object>> patterns = clusterLogPatterns(records, Math.max(1, Math.min(limit, 50)));
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("code", 200);
+        res.put("totalAnalyzed", records.size());
+        res.put("patterns", patterns);
+        return res;
+    }
+
+    /**
+     * 一键导出当前筛选条件下的日志文本（最多 2000 条）
+     */
+    @GetMapping("/logs/export")
+    public ResponseEntity<byte[]> exportLogs(
+            @RequestParam(value = "appName", required = false) String appName,
+            @RequestParam(value = "hostName", required = false) String hostName,
+            @RequestParam(value = "logPath", required = false) String logPath,
+            @RequestParam(value = "logLevel", required = false) String logLevel,
+            @RequestParam(value = "traceId", required = false) String traceId,
+            @RequestParam(value = "keyword", required = false) String keyword,
+            @RequestParam(value = "excludeKeyword", required = false) String excludeKeyword,
+            @RequestParam(value = "startTime", required = false) String startTime,
+            @RequestParam(value = "endTime", required = false) String endTime) {
+
+        List<ApmLogRecord> records = fetchLogsBatch(appName, hostName, null, logPath, logLevel, traceId,
+                keyword, excludeKeyword, startTime, endTime, 2000);
+        StringBuilder sb = new StringBuilder();
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        for (ApmLogRecord r : records) {
+            String ts = r.getCreatedAt() != null ? r.getCreatedAt().format(fmt) : "";
+            sb.append('[').append(ts).append("] ")
+              .append('[').append(r.getLogLevel() != null ? r.getLogLevel() : "INFO").append("] ")
+              .append('[').append(r.getAppName() != null ? r.getAppName() : "").append(" @ ")
+              .append(r.getHostName() != null ? r.getHostName() : "").append(']');
+            if (r.getTraceId() != null && !r.getTraceId().isBlank()) {
+                sb.append(" [tid:").append(r.getTraceId()).append(']');
+            }
+            sb.append(' ').append(r.getContent() != null ? r.getContent() : "").append('\n');
+        }
+        String fileName = "lightpulse-logs-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".log";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")
+                .contentType(new MediaType("text", "plain", StandardCharsets.UTF_8))
+                .body(sb.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * TraceID 全链路关联诊断：一次拉取 Span 调用链 + 关联慢 SQL + 关联日志
+     */
+    @GetMapping("/logs/trace-detail")
+    public Map<String, Object> getTraceDetail(@RequestParam("traceId") String traceId) {
+        String tid = traceId != null ? traceId.trim() : "";
+        List<Map<String, Object>> spans = Collections.emptyList();
+        List<Map<String, Object>> slowSqls = Collections.emptyList();
+        if (!tid.isEmpty()) {
+            try {
+                spans = jdbcTemplate.queryForList(
+                        "SELECT app_name, instance_id, class_name, method_name, http_method, http_path, cost_ms, success, error_msg, started_at "
+                        + "FROM apm_trace_span WHERE trace_id = ? ORDER BY started_at ASC LIMIT 100", tid);
+            } catch (Exception ignored) {}
+            try {
+                slowSqls = jdbcTemplate.queryForList(
+                        "SELECT app_name, instance_id, sql_text, cost_ms, datasource_url, occurred_at "
+                        + "FROM apm_slow_sql WHERE trace_id = ? ORDER BY occurred_at ASC LIMIT 100", tid);
+            } catch (Exception ignored) {}
+        }
+
+        List<ApmLogRecord> logs = tid.isEmpty() ? Collections.emptyList()
+                : fetchLogsBatch(null, null, null, null, "ALL", tid, null, null, "now-7d", "now+5m", 200);
+        // 链路详情里按时间正序展示，便于还原请求完整经过
+        List<ApmLogRecord> chronologicalLogs = new ArrayList<>(logs);
+        chronologicalLogs.sort(Comparator.comparing(ApmLogRecord::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparingLong(r -> r.getLineNumber() != null ? r.getLineNumber() : 0L));
+
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("code", 200);
+        res.put("traceId", tid);
+        res.put("spans", spans);
+        res.put("slowSqls", slowSqls);
+        res.put("logs", chronologicalLogs);
+        return res;
     }
 
     /**
@@ -453,6 +564,279 @@ public class LogController {
             return Map.of("code", 200, "enabled", newStatus, "message", newStatus == 1 ? "已启用" : "已停用");
         }
         return Map.of("code", 404, "message", "规则不存在");
+    }
+
+    private LambdaQueryWrapper<ApmLogRecord> buildMysqlLogQuery(String appName, String hostName, String ipAddress,
+                                                                String logPath, String logLevel, String traceId,
+                                                                String keyword, String excludeKeyword,
+                                                                String startTime, String endTime) {
+        var query = new LambdaQueryWrapper<ApmLogRecord>();
+        if (appName != null && !appName.isBlank() && !"*".equals(appName)) query.eq(ApmLogRecord::getAppName, appName.trim());
+        if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) query.eq(ApmLogRecord::getHostName, hostName.trim());
+        if (ipAddress != null && !ipAddress.isBlank()) query.eq(ApmLogRecord::getIpAddress, ipAddress.trim());
+        if (logPath != null && !logPath.isBlank()) query.eq(ApmLogRecord::getLogPath, logPath.trim());
+
+        List<String> levels = parseLogLevels(logLevel);
+        if (!levels.isEmpty()) {
+            query.in(ApmLogRecord::getLogLevel, levels);
+        }
+        if (traceId != null && !traceId.isBlank()) query.eq(ApmLogRecord::getTraceId, traceId.trim());
+        if (keyword != null && !keyword.isBlank()) query.like(ApmLogRecord::getContent, keyword.trim());
+        if (excludeKeyword != null && !excludeKeyword.isBlank()) {
+            for (String kw : excludeKeyword.split("\\|")) {
+                String trimmed = kw.trim();
+                if (!trimmed.isEmpty()) {
+                    query.notLike(ApmLogRecord::getContent, trimmed);
+                }
+            }
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime startDt = parseFilterTime(startTime, now);
+        LocalDateTime endDt = parseFilterTime(endTime, now);
+        if (startDt != null) query.ge(ApmLogRecord::getCreatedAt, startDt);
+        if (endDt != null) query.le(ApmLogRecord::getCreatedAt, endDt);
+        return query;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<ApmLogRecord> fetchLogsBatch(String appName, String hostName, String ipAddress,
+                                            String logPath, String logLevel, String traceId,
+                                            String keyword, String excludeKeyword,
+                                            String startTime, String endTime, int maxRows) {
+        if (storageEngineService.isEsActive()) {
+            List<ApmLogRecord> all = new ArrayList<>();
+            int pageSize = Math.min(500, maxRows);
+            int maxPages = (maxRows + pageSize - 1) / pageSize;
+            for (int p = 1; p <= maxPages; p++) {
+                Map<String, Object> r = esStorageService.queryLogs(appName, hostName, ipAddress, logPath, logLevel, traceId,
+                        keyword, excludeKeyword, startTime, endTime, p, pageSize, storageEngineService.getCurrentConfig());
+                Object dataObj = r.get("data");
+                if (!(dataObj instanceof List)) break;
+                List<ApmLogRecord> chunk = (List<ApmLogRecord>) dataObj;
+                if (chunk.isEmpty()) break;
+                all.addAll(chunk);
+                if (chunk.size() < pageSize || all.size() >= maxRows) break;
+            }
+            return all.size() > maxRows ? all.subList(0, maxRows) : all;
+        }
+        var query = buildMysqlLogQuery(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, excludeKeyword, startTime, endTime);
+        query.orderByDesc(ApmLogRecord::getCreatedAt).orderByDesc(ApmLogRecord::getId);
+        return logRecordRepo.selectPage(new Page<>(1, maxRows), query).getRecords();
+    }
+
+    static List<String> parseLogLevels(String logLevel) {
+        if (logLevel == null || logLevel.isBlank()) return Collections.emptyList();
+        List<String> list = new ArrayList<>();
+        for (String part : logLevel.split(",")) {
+            String lv = part.trim().toUpperCase(Locale.ROOT);
+            if (!lv.isEmpty() && !"ALL".equals(lv)) {
+                list.add(lv);
+            }
+        }
+        return list;
+    }
+
+    static List<Map<String, Object>> buildLocalHistogramBuckets(List<ApmLogRecord> records,
+                                                                String startTime, String endTime,
+                                                                String interval, LocalDateTime now) {
+        LocalDateTime startDt = parseFilterTime((startTime == null || startTime.isBlank()) ? "now-1h" : startTime, now);
+        LocalDateTime endDt = parseFilterTime((endTime == null || endTime.isBlank()) ? "now" : endTime, now);
+        if (startDt == null) startDt = now.minusHours(1);
+        if (endDt == null) endDt = now;
+        if (endDt.isBefore(startDt)) {
+            LocalDateTime tmp = startDt;
+            startDt = endDt;
+            endDt = tmp;
+        }
+
+        long intervalSec = parseIntervalSeconds(interval);
+        long totalSec = Math.max(intervalSec, Duration.between(startDt, endDt).getSeconds());
+        // 避免超长区间生成过多桶
+        while (totalSec / intervalSec > 300) {
+            intervalSec *= 2;
+        }
+
+        long startEpoch = startDt.atZone(java.time.ZoneId.systemDefault()).toEpochSecond();
+        long endEpoch = endDt.atZone(java.time.ZoneId.systemDefault()).toEpochSecond();
+        long alignedStart = (startEpoch / intervalSec) * intervalSec;
+        int bucketCount = (int) Math.min(300, Math.max(1, ((endEpoch - alignedStart) / intervalSec) + 1));
+
+        long[] infoCnt = new long[bucketCount];
+        long[] warnCnt = new long[bucketCount];
+        long[] errCnt = new long[bucketCount];
+
+        if (records != null) {
+            for (ApmLogRecord r : records) {
+                if (r.getCreatedAt() == null) continue;
+                long recEpoch = r.getCreatedAt().atZone(java.time.ZoneId.systemDefault()).toEpochSecond();
+                int idx = (int) ((recEpoch - alignedStart) / intervalSec);
+                if (idx < 0 || idx >= bucketCount) continue;
+                String lv = r.getLogLevel() != null ? r.getLogLevel().toUpperCase(Locale.ROOT) : "INFO";
+                if ("ERROR".equals(lv)) errCnt[idx]++;
+                else if ("WARN".equals(lv)) warnCnt[idx]++;
+                else infoCnt[idx]++;
+            }
+        }
+
+        List<Map<String, Object>> buckets = new ArrayList<>(bucketCount);
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+        for (int i = 0; i < bucketCount; i++) {
+            LocalDateTime bt = LocalDateTime.ofInstant(java.time.Instant.ofEpochSecond(alignedStart + i * intervalSec),
+                    java.time.ZoneId.systemDefault());
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("time", bt.format(fmt));
+            item.put("total", infoCnt[i] + warnCnt[i] + errCnt[i]);
+            item.put("info", infoCnt[i]);
+            item.put("warn", warnCnt[i]);
+            item.put("error", errCnt[i]);
+            buckets.add(item);
+        }
+        return buckets;
+    }
+
+    private static long parseIntervalSeconds(String interval) {
+        if (interval == null || interval.isBlank()) return 60;
+        String s = interval.trim().toLowerCase(Locale.ROOT);
+        try {
+            char unit = s.charAt(s.length() - 1);
+            long val = Long.parseLong(s.substring(0, s.length() - 1));
+            switch (unit) {
+                case 's': return Math.max(5, val);
+                case 'm': return Math.max(1, val) * 60;
+                case 'h': return Math.max(1, val) * 3600;
+                case 'd': return Math.max(1, val) * 86400;
+                default: return 60;
+            }
+        } catch (Exception ignored) {
+            return 60;
+        }
+    }
+
+    private static final Pattern CRI_PREFIX_PATTERN = Pattern.compile(
+            "^\\d{4}[-/]\\d{2}[-/]\\d{2}[T\\s]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?\\s+(?:stdout|stderr)\\s+[FP]\\s+");
+    private static final Pattern TS_TOKEN_PATTERN = Pattern.compile(
+            "\\b\\d{4}[-/]\\d{2}[-/]\\d{2}(?:[T\\s]\\d{2}:\\d{2}:\\d{2}(?:[.,]\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?)?");
+    private static final Pattern IP_TOKEN_PATTERN = Pattern.compile("\\b\\d{1,3}(?:\\.\\d{1,3}){3}(?::\\d+)?\\b");
+    private static final Pattern UUID_HEX_PATTERN = Pattern.compile("\\b(?:[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}|(?:0x)?[a-fA-F0-9]{12,})\\b");
+    private static final Pattern NUM_TOKEN_PATTERN = Pattern.compile("\\b\\d+(?:\\.\\d+)?\\b");
+
+    static String normalizeLogPattern(String content) {
+        if (content == null || content.isBlank()) return "";
+        int nl = content.indexOf('\n');
+        String firstLine = (nl >= 0 ? content.substring(0, nl) : content).trim();
+        firstLine = CRI_PREFIX_PATTERN.matcher(firstLine).replaceFirst("").trim();
+        String p = TS_TOKEN_PATTERN.matcher(firstLine).replaceAll("<TS>");
+        p = IP_TOKEN_PATTERN.matcher(p).replaceAll("<IP>");
+        p = UUID_HEX_PATTERN.matcher(p).replaceAll("<HEX>");
+        p = NUM_TOKEN_PATTERN.matcher(p).replaceAll("<NUM>");
+        p = p.replaceAll("\\s+", " ").trim();
+        return p.length() > 220 ? p.substring(0, 220) + "..." : p;
+    }
+
+    static List<Map<String, Object>> clusterLogPatterns(List<ApmLogRecord> records, int limit) {
+        if (records == null || records.isEmpty()) return Collections.emptyList();
+        class Acc {
+            String pattern;
+            String logLevel;
+            long count = 0;
+            LocalDateTime firstSeen;
+            LocalDateTime lastSeen;
+            Set<String> apps = new LinkedHashSet<>();
+            String sampleContent;
+            String sampleTraceId;
+            String sampleHost;
+            String sampleApp;
+            String sampleLogPath;
+            long sampleLineNumber;
+        }
+        Map<String, Acc> map = new LinkedHashMap<>();
+        for (ApmLogRecord r : records) {
+            String pat = normalizeLogPattern(r.getContent());
+            if (pat.isEmpty()) continue;
+            String lv = r.getLogLevel() != null ? r.getLogLevel().toUpperCase(Locale.ROOT) : "INFO";
+            String key = lv + "::" + pat;
+            Acc acc = map.computeIfAbsent(key, k -> {
+                Acc a = new Acc();
+                a.pattern = pat;
+                a.logLevel = lv;
+                a.sampleContent = r.getContent();
+                a.sampleTraceId = r.getTraceId();
+                a.sampleHost = r.getHostName();
+                a.sampleApp = r.getAppName();
+                a.sampleLogPath = r.getLogPath();
+                a.sampleLineNumber = r.getLineNumber() != null ? r.getLineNumber() : 0L;
+                return a;
+            });
+            acc.count++;
+            if (r.getAppName() != null && !r.getAppName().isBlank()) acc.apps.add(r.getAppName());
+            LocalDateTime ts = r.getCreatedAt();
+            if (ts != null) {
+                if (acc.firstSeen == null || ts.isBefore(acc.firstSeen)) acc.firstSeen = ts;
+                if (acc.lastSeen == null || ts.isAfter(acc.lastSeen)) acc.lastSeen = ts;
+            }
+            if ((acc.sampleTraceId == null || acc.sampleTraceId.isBlank()) && r.getTraceId() != null && !r.getTraceId().isBlank()) {
+                acc.sampleTraceId = r.getTraceId();
+            }
+        }
+
+        List<Acc> sorted = new ArrayList<>(map.values());
+        sorted.sort((a, b) -> Long.compare(b.count, a.count));
+        int cap = Math.min(limit, sorted.size());
+        List<Map<String, Object>> result = new ArrayList<>(cap);
+        for (int i = 0; i < cap; i++) {
+            Acc a = sorted.get(i);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("pattern", a.pattern);
+            m.put("logLevel", a.logLevel);
+            m.put("count", a.count);
+            m.put("apps", new ArrayList<>(a.apps));
+            m.put("firstSeen", a.firstSeen);
+            m.put("lastSeen", a.lastSeen);
+            m.put("sampleContent", a.sampleContent);
+            m.put("sampleTraceId", a.sampleTraceId);
+            m.put("sampleHost", a.sampleHost);
+            m.put("sampleApp", a.sampleApp);
+            m.put("sampleLogPath", a.sampleLogPath);
+            m.put("sampleLineNumber", a.sampleLineNumber);
+            result.add(m);
+        }
+        return result;
+    }
+
+    static LocalDateTime parseFilterTime(String timeStr, LocalDateTime now) {
+        if (timeStr == null || timeStr.isBlank()) return null;
+        String t = timeStr.trim();
+        if ("now".equalsIgnoreCase(t)) return now;
+        if (t.startsWith("now-") || t.startsWith("now+")) {
+            boolean minus = t.charAt(3) == '-';
+            String expr = t.substring(4).trim().toLowerCase(Locale.ROOT);
+            if (expr.length() >= 2) {
+                char unit = expr.charAt(expr.length() - 1);
+                try {
+                    long amount = Long.parseLong(expr.substring(0, expr.length() - 1));
+                    long signed = minus ? -amount : amount;
+                    switch (unit) {
+                        case 's': return now.plusSeconds(signed);
+                        case 'm': return now.plusMinutes(signed);
+                        case 'h': return now.plusHours(signed);
+                        case 'd': return now.plusDays(signed);
+                        default: break;
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(t).atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+        } catch (Exception ignored) {}
+        String normalized = t.replace(' ', 'T');
+        if (normalized.length() == 16) normalized = normalized + ":00";
+        try {
+            return LocalDateTime.parse(normalized, DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private String str(Object o) {

@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -671,12 +672,19 @@ public class EsStorageService {
         });
     }
 
-    /**
-     * 控制台：从 ES 多条件检索日志列表
-     */
     public Map<String, Object> queryLogs(String appName, String hostName, String ipAddress,
                                          String logPath, String logLevel, String traceId,
                                          String keyword, String startTime, String endTime,
+                                         int page, int size, StorageEngineConfig config) {
+        return queryLogs(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, null, startTime, endTime, page, size, config);
+    }
+
+    /**
+     * 控制台：从 ES 多条件检索日志列表（支持多级别逗号分隔、排除关键词）
+     */
+    public Map<String, Object> queryLogs(String appName, String hostName, String ipAddress,
+                                         String logPath, String logLevel, String traceId,
+                                         String keyword, String excludeKeyword, String startTime, String endTime,
                                          int page, int size, StorageEngineConfig config) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("code", 200);
@@ -693,42 +701,12 @@ public class EsStorageService {
             String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
             String alias = prefix + "logs";
 
-            List<String> mustClauses = new ArrayList<>();
-            if (appName != null && !appName.isBlank() && !"*".equals(appName)) {
-                String safe = appName.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"appName\":\"" + safe + "\"}},{\"term\":{\"appName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"appName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) {
-                String safe = hostName.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"hostName\":\"" + safe + "\"}},{\"term\":{\"hostName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"hostName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (ipAddress != null && !ipAddress.isBlank()) {
-                String safe = ipAddress.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"ipAddress\":\"" + safe + "\"}},{\"term\":{\"ipAddress.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (logPath != null && !logPath.isBlank()) {
-                String safe = logPath.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logPath\":\"" + safe + "\"}},{\"term\":{\"logPath.keyword\":\"" + safe + "\"}},{\"wildcard\":{\"logPath.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"logPath\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (logLevel != null && !logLevel.isBlank() && !"ALL".equalsIgnoreCase(logLevel)) {
-                String safe = logLevel.trim().toUpperCase().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logLevel\":\"" + safe + "\"}},{\"term\":{\"logLevel.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (traceId != null && !traceId.isBlank()) {
-                String safe = traceId.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"traceId\":\"" + safe + "\"}},{\"term\":{\"traceId.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (keyword != null && !keyword.isBlank()) {
-                mustClauses.add(buildContentQuery(keyword));
-            }
-
-            // 时间范围
             String timeRangeStart = normalizeEsDate(startTime, "now-1h");
             String timeRangeEnd = normalizeEsDate(endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime) ? endTime : "now+5m", "now+5m");
-            mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
+            String boolQuery = buildLogsBoolQuery(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, excludeKeyword, timeRangeStart, timeRangeEnd);
 
             int safePage = Math.max(1, page);
-            int safeSize = Math.max(1, Math.min(size, 200));
+            int safeSize = Math.max(1, Math.min(size, 500));
             int from = (safePage - 1) * safeSize;
 
             String queryJson = String.format("""
@@ -736,17 +714,13 @@ public class EsStorageService {
                   "from": %d,
                   "size": %d,
                   "track_total_hits": true,
-                  "query": {
-                    "bool": {
-                      "must": [%s]
-                    }
-                  },
+                  "query": %s,
                   "sort": [
                     { "@timestamp": { "order": "desc" } },
                     { "lineNumber": { "order": "desc", "unmapped_type": "long" } }
                   ]
                 }
-                """, from, safeSize, String.join(",", mustClauses));
+                """, from, safeSize, boolQuery);
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
@@ -779,11 +753,18 @@ public class EsStorageService {
         return result;
     }
 
+    public Map<String, Object> queryLogHistogram(String appName, String hostName, String logPath,
+                                                 String keyword, String startTime, String endTime,
+                                                 String interval, StorageEngineConfig config) {
+        return queryLogHistogram(appName, hostName, logPath, null, keyword, null, startTime, endTime, interval, config);
+    }
+
     /**
      * 控制台：查询日志量时间分布柱状图（对标 Grafana Loki Log Volume）
      */
     public Map<String, Object> queryLogHistogram(String appName, String hostName, String logPath,
-                                                 String keyword, String startTime, String endTime,
+                                                 String logLevel, String keyword, String excludeKeyword,
+                                                 String startTime, String endTime,
                                                  String interval, StorageEngineConfig config) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("code", 200);
@@ -797,36 +778,16 @@ public class EsStorageService {
             String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
             String alias = prefix + "logs";
 
-            List<String> mustClauses = new ArrayList<>();
-            if (appName != null && !appName.isBlank() && !"*".equals(appName)) {
-                String safe = appName.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"appName\":\"" + safe + "\"}},{\"term\":{\"appName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"appName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) {
-                String safe = hostName.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"hostName\":\"" + safe + "\"}},{\"term\":{\"hostName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"hostName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (logPath != null && !logPath.isBlank()) {
-                String safe = logPath.trim().replace("\"", "\\\"");
-                mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logPath\":\"" + safe + "\"}},{\"term\":{\"logPath.keyword\":\"" + safe + "\"}},{\"wildcard\":{\"logPath.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"logPath\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
-            }
-            if (keyword != null && !keyword.isBlank()) {
-                mustClauses.add(buildContentQuery(keyword));
-            }
             String timeRangeStart = normalizeEsDate(startTime, "now-1h");
             String timeRangeEnd = normalizeEsDate(endTime != null && !endTime.isBlank() && !"now".equalsIgnoreCase(endTime) ? endTime : "now", "now");
-            mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
+            String boolQuery = buildLogsBoolQuery(appName, hostName, null, logPath, logLevel, null, keyword, excludeKeyword, timeRangeStart, timeRangeEnd);
 
             String safeInterval = (interval != null && !interval.isBlank()) ? interval : "1m";
 
             String queryJson = String.format("""
                 {
                   "size": 0,
-                  "query": {
-                    "bool": {
-                      "must": [%s]
-                    }
-                  },
+                  "query": %s,
                   "aggs": {
                     "by_time": {
                       "date_histogram": {
@@ -849,7 +810,7 @@ public class EsStorageService {
                     }
                   }
                 }
-                """, String.join(",", mustClauses), safeInterval, timeRangeStart, timeRangeEnd);
+                """, boolQuery, safeInterval, timeRangeStart, timeRangeEnd);
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
@@ -864,11 +825,7 @@ public class EsStorageService {
                 String fallbackQuery = String.format("""
                     {
                       "size": 0,
-                      "query": {
-                        "bool": {
-                          "must": [%s]
-                        }
-                      },
+                      "query": %s,
                       "aggs": {
                         "by_time": {
                           "date_histogram": {
@@ -887,7 +844,7 @@ public class EsStorageService {
                         }
                       }
                     }
-                    """, String.join(",", mustClauses), safeInterval);
+                    """, boolQuery, safeInterval);
                 HttpRequest.Builder fbReq = HttpRequest.newBuilder()
                         .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
                         .header("Content-Type", "application/json")
@@ -1006,11 +963,19 @@ public class EsStorageService {
 
         String ts = src.path("@timestamp").asText();
         if (!ts.isBlank()) {
-            try {
-                lr.setCreatedAt(LocalDateTime.parse(ts.length() > 19 ? ts.substring(0, 19) : ts, TIME_FMT));
-            } catch (Exception ignored) {}
+            lr.setCreatedAt(parseEsTimestamp(ts));
         }
         return lr;
+    }
+
+    private LocalDateTime parseEsTimestamp(String ts) {
+        try {
+            return OffsetDateTime.parse(ts).atZoneSameInstant(ZoneId.systemDefault()).toLocalDateTime();
+        } catch (Exception ignored) {}
+        try {
+            return LocalDateTime.parse(ts.length() > 19 ? ts.substring(0, 19) : ts, TIME_FMT);
+        } catch (Exception ignored) {}
+        return null;
     }
 
     /**
@@ -1102,7 +1067,66 @@ public class EsStorageService {
         return m;
     }
 
-            private String buildContentQuery(String keyword) {
+    private String buildLogsBoolQuery(String appName, String hostName, String ipAddress,
+                                      String logPath, String logLevel, String traceId,
+                                      String keyword, String excludeKeyword,
+                                      String timeRangeStart, String timeRangeEnd) {
+        List<String> mustClauses = new ArrayList<>();
+        if (appName != null && !appName.isBlank() && !"*".equals(appName)) {
+            String safe = appName.trim().replace("\"", "\\\"");
+            mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"appName\":\"" + safe + "\"}},{\"term\":{\"appName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"appName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
+        }
+        if (hostName != null && !hostName.isBlank() && !"*".equals(hostName)) {
+            String safe = hostName.trim().replace("\"", "\\\"");
+            mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"hostName\":\"" + safe + "\"}},{\"term\":{\"hostName.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"hostName\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
+        }
+        if (ipAddress != null && !ipAddress.isBlank()) {
+            String safe = ipAddress.trim().replace("\"", "\\\"");
+            mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"ipAddress\":\"" + safe + "\"}},{\"term\":{\"ipAddress.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
+        }
+        if (logPath != null && !logPath.isBlank()) {
+            String safe = logPath.trim().replace("\"", "\\\"");
+            mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"logPath\":\"" + safe + "\"}},{\"term\":{\"logPath.keyword\":\"" + safe + "\"}},{\"wildcard\":{\"logPath.keyword\":\"" + safe + "\"}},{\"match_phrase\":{\"logPath\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
+        }
+        if (logLevel != null && !logLevel.isBlank() && !"ALL".equalsIgnoreCase(logLevel)) {
+            List<String> levelShould = new ArrayList<>();
+            for (String lv : logLevel.split(",")) {
+                String t = lv.trim().toUpperCase(Locale.ROOT);
+                if (!t.isEmpty() && !"ALL".equals(t)) {
+                    String safe = t.replace("\"", "\\\"");
+                    levelShould.add("{\"term\":{\"logLevel\":\"" + safe + "\"}}");
+                    levelShould.add("{\"term\":{\"logLevel.keyword\":\"" + safe + "\"}}");
+                }
+            }
+            if (!levelShould.isEmpty()) {
+                mustClauses.add("{\"bool\":{\"should\":[" + String.join(",", levelShould) + "],\"minimum_should_match\":1}}");
+            }
+        }
+        if (traceId != null && !traceId.isBlank()) {
+            String safe = traceId.trim().replace("\"", "\\\"");
+            mustClauses.add("{\"bool\":{\"should\":[{\"term\":{\"traceId\":\"" + safe + "\"}},{\"term\":{\"traceId.keyword\":\"" + safe + "\"}}],\"minimum_should_match\":1}}");
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            mustClauses.add(buildContentQuery(keyword));
+        }
+        mustClauses.add(String.format("{\"range\":{\"@timestamp\":{\"gte\":\"%s\",\"lte\":\"%s\"}}}", timeRangeStart, timeRangeEnd));
+
+        List<String> mustNotClauses = new ArrayList<>();
+        if (excludeKeyword != null && !excludeKeyword.isBlank()) {
+            for (String kw : excludeKeyword.split("\\|")) {
+                String trimmed = kw.trim();
+                if (!trimmed.isEmpty()) {
+                    mustNotClauses.add(buildContentQuery(trimmed));
+                }
+            }
+        }
+        if (mustNotClauses.isEmpty()) {
+            return "{\"bool\":{\"must\":[" + String.join(",", mustClauses) + "]}}";
+        }
+        return "{\"bool\":{\"must\":[" + String.join(",", mustClauses) + "],\"must_not\":[" + String.join(",", mustNotClauses) + "]}}";
+    }
+
+    private String buildContentQuery(String keyword) {
         String safeKw = keyword.trim().replace("\"", "\\\"");
         String safeKwLower = safeKw.toLowerCase();
         return "{\"bool\":{\"should\":[" +

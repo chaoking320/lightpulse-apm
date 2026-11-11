@@ -71,3 +71,6 @@ desktop.ini
 # Private & Internal Documentation (DO NOT COMMIT)
 private-docs/
 docs/private/
+
+# Agent log tailer offset checkpoints
+lightpulse-log-offsets.json*

@@ -4,12 +4,21 @@ import com.monitor.agent.config.AgentConfig;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,18 +43,38 @@ public class LogCollector {
     private static final AtomicBoolean running = new AtomicBoolean(false);
     private static Thread reportThread;
     private static ScheduledExecutorService scheduler;
+    private static final CheckpointStore checkpointStore = new CheckpointStore(
+            new File(System.getProperty("lightpulse.log.checkpoint", "lightpulse-log-offsets.json"))
+    );
 
     // 日期行首正则（支持 2026-10-28, 2026/10/28, [2026-10-28 等主流日志前缀）
     private static final Pattern DATE_HEAD_PATTERN = Pattern.compile("^\\[?\\d{4}[-/]\\d{2}[-/]\\d{2}");
 
     // 日志级别提取正则
-    private static final Pattern LEVEL_PATTERN = Pattern.compile("\\b(ERROR|WARN|INFO|DEBUG|FATAL|TRACE)\\b", Pattern.CASE_INSENSITIVE);
+    // 日志级别提取正则：
+    // 1. 独立级别词仅匹配大写，避免正文中英文单词（如 "error rising"）误判为 ERROR
+    // 2. 小写仅匹配显式结构化标记（如 [error]、level=error、"level":"error"）
+    private static final Pattern LEVEL_PATTERN = Pattern.compile(
+            "(?:\\b(FATAL|ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\\b)"
+            + "|(?:\\[\\s*(fatal|error|warn|warning|info|debug|trace)\\s*\\])"
+            + "|(?:\\b(?:level|severity|lvl)\"?\\s*[:=]\\s*\"?(fatal|error|warn|warning|info|debug|trace)\\b)"
+    );
+
+    // 日志行首时间戳解析正则：支持 ISO-8601 (带 Z/+08:00/-05:00/+0800 时区及纳秒) 与常见日期时间格式
+    private static final Pattern LOG_TS_PATTERN = Pattern.compile(
+            "^\\[?(\\d{4})[-/](\\d{2})[-/](\\d{2})[T\\s](\\d{2}):(\\d{2}):(\\d{2})(?:[.,](\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2}|[+-]\\d{4}(?!\\d))?"
+    );
 
     // TraceID 提取正则 (支持 [tid:xxx], traceId=xxx, 或 16~32 位十六进制/UUID)
     private static final Pattern TRACE_ID_PATTERN = Pattern.compile("(?:\\[?(?:trace[_-]?id|tid)[:=\\s]*([a-zA-Z0-9_-]{16,64})\\]?)|(?:\\[([a-fA-F0-9]{16,32})\\])");
 
+    static synchronized void setCheckpointFile(File file) {
+        checkpointStore.setFileAndReload(file);
+    }
+
     public static synchronized void init(AgentConfig config) {
         agentConfig = config;
+        checkpointStore.loadIfNeeded();
         if (running.compareAndSet(false, true)) {
             scheduler = Executors.newScheduledThreadPool(2, r -> {
                 Thread t = new Thread(r, "monitor-log-tailer");
@@ -104,36 +133,23 @@ public class LogCollector {
     }
 
     /**
-     * 单个日志文件 Tailer 任务
+     * 单个日志采集规则的任务调度器：支持通配符匹配多个活跃文件并发增量 Tail，
+     * 每个文件独立维护读取游标、半行缓冲、多行堆栈合并与 ERROR 上下文窗口，并通过 CheckpointStore 持久化断点。
      */
     private static class FileTailer implements Runnable {
+        private static final int MAX_LINE_BYTES = 256 * 1024;
+        private static final int MAX_CONCURRENT_FILES = 32;
+        private static final long IDLE_RAF_CLOSE_MS = 60_000L;
+
         private volatile LogConfig config;
         private volatile boolean stopped = false;
-        private RandomAccessFile raf;
-        private File file;
-        private long lastFileOffset = -1;
-        private long lastFileLength = 0;
         private final AtomicLong lineCounter = new AtomicLong(0);
-
-        // 分块读取缓冲：一次系统调用读取 64KB，替代之前逐字节 RandomAccessFile.read()
-        // （逐字节读取每个字节都是一次系统调用，日志量大时会明显占用业务进程 CPU）
         private final byte[] readBuf = new byte[64 * 1024];
-        // 尚未遇到换行符的半行数据，跨轮次保留，避免把正在写入的日志行截成两条记录
-        private final ByteArrayOutputStream partialLine = new ByteArrayOutputStream(256);
-        private static final int MAX_LINE_BYTES = 256 * 1024;
 
-        // 多行异常合并缓冲区
-        private final StringBuilder multilineBuf = new StringBuilder(1024);
-        private String currentFirstLine = null;
-        private long lastLineTime = 0;
-
-        // 内存环形滑动窗口（缓存前 N 行供 ERROR 附带上下文）
-        private final ArrayDeque<String> ringBuffer;
-        private int pendingPostErrorLines = 0;
-        private LogRecord pendingErrorRecord = null;
-        private List<String> pendingPreLines = null;
-        private long pendingErrorSince = 0;
-        private final List<String> postErrorLines = new ArrayList<>();
+        // key: file.getAbsolutePath() -> 该文件的独立采集状态
+        private final Map<String, SingleFileState> activeStates = new LinkedHashMap<>();
+        private boolean initialMountDone = false;
+        private String lastPatternPath = null;
 
         // 每秒限流计数器
         private long currentSecond = 0;
@@ -141,38 +157,77 @@ public class LogCollector {
         private boolean rateLimitLogged = false;
         private long lastWarnTime = 0;
 
+        private static class SingleFileState {
+            final File file;
+            final String path;
+            RandomAccessFile raf;
+            long lastFileOffset = -1;
+            int fpLen = 0;
+            String fingerprint = "";
+            long lastActiveMs = System.currentTimeMillis();
+
+            final ByteArrayOutputStream partialLine = new ByteArrayOutputStream(256);
+            final StringBuilder multilineBuf = new StringBuilder(1024);
+            String currentFirstLine = null;
+            long lastLineTime = 0;
+
+            final ArrayDeque<String> ringBuffer;
+            int pendingPostErrorLines = 0;
+            LogRecord pendingErrorRecord = null;
+            List<String> pendingPreLines = null;
+            long pendingErrorSince = 0;
+            final List<String> postErrorLines = new ArrayList<>();
+
+            SingleFileState(File file, int window) {
+                this.file = file;
+                this.path = file.getAbsolutePath();
+                this.ringBuffer = new ArrayDeque<>(window);
+            }
+
+            void closeRaf() {
+                if (raf != null) {
+                    try {
+                        raf.close();
+                    } catch (Exception ignored) {}
+                    raf = null;
+                }
+            }
+        }
+
         public FileTailer(LogConfig config) {
             this.config = config;
-            int window = Math.max(5, Math.min(config.getContextLines(), 30));
-            this.ringBuffer = new ArrayDeque<>(window);
-            this.file = resolveTargetFile(config.getLogPath());
+            this.lastPatternPath = config.getLogPath();
         }
 
         public void updateConfig(LogConfig newConfig) {
             this.config = newConfig;
+            if (newConfig != null && !Objects.equals(lastPatternPath, newConfig.getLogPath())) {
+                closeAllStates();
+                this.lastPatternPath = newConfig.getLogPath();
+                this.initialMountDone = false;
+            }
         }
 
         public void stop() {
             this.stopped = true;
-            closeRaf();
+            closeAllStates();
+            checkpointStore.flushIfDirty(true);
         }
 
-        private void closeRaf() {
-            if (raf != null) {
-                try {
-                    raf.close();
-                } catch (Exception ignored) {}
-                raf = null;
+        private void closeAllStates() {
+            for (SingleFileState st : activeStates.values()) {
+                flushMultilineRecord(st);
+                flushPendingError(st);
+                st.closeRaf();
             }
+            activeStates.clear();
         }
 
-        /**
-         * 解析真实目标日志文件（支持绝对路径、通配符通配如 jeecgboot-*.log，自动锁定最新活跃文件）
-         */
-        private File resolveTargetFile(String patternPath) {
-            if (patternPath == null || patternPath.isBlank()) return null;
+        private List<File> listActiveFiles(String patternPath) {
+            if (patternPath == null || patternPath.isBlank()) return Collections.emptyList();
             if (!patternPath.contains("*") && !patternPath.contains("?")) {
-                return new File(patternPath);
+                File f = new File(patternPath);
+                return f.exists() ? Collections.singletonList(f) : Collections.emptyList();
             }
 
             try {
@@ -182,7 +237,7 @@ public class LogCollector {
 
                 File dir = new File(dirPath);
                 if (!dir.exists() || !dir.isDirectory()) {
-                    return null;
+                    return Collections.emptyList();
                 }
 
                 String regex = filePattern.replace(".", "\\.").replace("*", ".*").replace("?", ".");
@@ -190,14 +245,18 @@ public class LogCollector {
 
                 File[] matches = dir.listFiles((d, name) -> p.matcher(name).matches());
                 if (matches == null || matches.length == 0) {
-                    return null;
+                    return Collections.emptyList();
                 }
 
-                // 按文件最后修改时间倒序，获取当前正在写入的最新日志文件
                 Arrays.sort(matches, (f1, f2) -> Long.compare(f2.lastModified(), f1.lastModified()));
-                return matches[0];
+                int limit = Math.min(matches.length, MAX_CONCURRENT_FILES);
+                List<File> result = new ArrayList<>(limit);
+                for (int i = 0; i < limit; i++) {
+                    result.add(matches[i]);
+                }
+                return result;
             } catch (Exception e) {
-                return null;
+                return Collections.emptyList();
             }
         }
 
@@ -205,9 +264,9 @@ public class LogCollector {
         public void run() {
             if (stopped) return;
             try {
-                File target = resolveTargetFile(config.getLogPath());
-                if (target == null || !target.exists()) {
-                    closeRaf();
+                List<File> targets = listActiveFiles(config.getLogPath());
+                if (targets.isEmpty()) {
+                    closeAllStates();
                     long nowMs = System.currentTimeMillis();
                     if (nowMs - lastWarnTime > 60000) {
                         System.out.println("[LogCollector] 待命: 未找到匹配的活跃日志文件: " + config.getLogPath() + " (将在文件写入/生成时自动挂载)");
@@ -216,60 +275,40 @@ public class LogCollector {
                     return;
                 }
 
-                // 检测是否发生了按天/按序号滚动或首次锁定活跃文件
-                if (file == null || !target.getAbsolutePath().equals(file.getAbsolutePath())) {
-                    if (file != null) {
-                        System.out.println("[LogCollector] 检测到最新活跃文件切换: [" + file.getName() + "] -> [" + target.getName() + "]，自动接力增量采集 ✓");
-                        drainOldFile();
-                        flushMultilineRecord();
-                        flushPendingError();
-                    } else {
-                        System.out.println("[LogCollector] 成功锁定并挂载活跃日志文件: [" + target.getAbsolutePath() + "] (当前大小: " + target.length() + " 字节) ✓");
-                    }
-                    closeRaf();
-                    file = target;
-                    lastFileOffset = (lastFileOffset >= 0) ? 0 : -1;
+                Map<String, File> targetMap = new LinkedHashMap<>();
+                for (File t : targets) {
+                    targetMap.put(t.getAbsolutePath(), t);
                 }
 
-                long curLen = file.length();
-
-                // 首次打开：从 EOF 游标开始读，绝不把历史存量老日志塞满网络！
-                if (raf == null) {
-                    raf = new RandomAccessFile(file, "r");
-                    if (lastFileOffset < 0) {
-                        lastFileOffset = curLen;
-                        raf.seek(curLen);
-                        lastFileLength = curLen;
-                        System.out.println("[LogCollector] 首次挂载文件 [" + file.getName() + "], 定位至文件末尾 EOF: " + curLen + " 字节");
-                        return;
-                    } else {
-                        raf.seek(Math.min(lastFileOffset, curLen));
+                // 清理已消失或滑出活跃窗口的文件状态
+                for (Iterator<Map.Entry<String, SingleFileState>> it = activeStates.entrySet().iterator(); it.hasNext(); ) {
+                    Map.Entry<String, SingleFileState> entry = it.next();
+                    if (!targetMap.containsKey(entry.getKey())) {
+                        SingleFileState old = entry.getValue();
+                        drainFile(old);
+                        flushMultilineRecord(old);
+                        flushPendingError(old);
+                        old.closeRaf();
+                        it.remove();
                     }
                 }
 
-                // 文件切割/轮转感知 (Log Rotation: 当前文件长度变小，如 app.log 被切割重命名为 app.log.1 并重建新 app.log)
-                if (curLen < lastFileOffset) {
-                    System.out.println("[LogCollector] 检测到日志文件发生轮转切割 (Rotation): " + file.getName() + "，游标重置为 0");
-                    closeRaf();
-                    raf = new RandomAccessFile(file, "r");
-                    partialLine.reset();
-                    lastFileOffset = 0;
-                    raf.seek(0);
+                boolean isInitialRuleMount = !initialMountDone;
+                int window = Math.max(5, Math.min(config.getContextLines(), 30));
+
+                for (File target : targets) {
+                    String path = target.getAbsolutePath();
+                    SingleFileState state = activeStates.get(path);
+                    if (state == null) {
+                        state = mountFileState(target, window, isInitialRuleMount);
+                        activeStates.put(path, state);
+                    }
+                    pollFileState(state);
                 }
 
-                // 没有新数据时检查超时 flush
-                if (curLen == lastFileOffset) {
-                    checkFlushTimeout();
-                    return;
-                }
-
-                // 增量读取新产生的完整文本行（半行留待下一轮）
-                readAvailable(raf);
-                lastFileLength = curLen;
-
+                initialMountDone = true;
+                checkpointStore.flushIfDirty(false);
             } catch (Exception e) {
-                closeRaf();
-                // 采集异常不再完全静默（每 60 秒最多一条），方便定位权限、编码等问题
                 long nowMs = System.currentTimeMillis();
                 if (nowMs - lastWarnTime > 60000) {
                     System.err.println("[LogCollector] 采集异常，将自动重试: " + e);
@@ -278,124 +317,194 @@ public class LogCollector {
             }
         }
 
+        private SingleFileState mountFileState(File target, int window, boolean isInitialRuleMount) {
+            SingleFileState st = new SingleFileState(target, window);
+            long curLen = target.length();
+            CheckpointEntry cp = checkpointStore.get(st.path);
+
+            if (cp != null && curLen >= cp.offset && matchesFingerprint(target, cp)) {
+                st.lastFileOffset = cp.offset;
+                st.fpLen = cp.fpLen;
+                st.fingerprint = cp.fingerprint;
+                System.out.println("[LogCollector] 从断点恢复日志采集 [" + target.getName() + "] offset=" + cp.offset + " / len=" + curLen + " ✓");
+            } else if (cp != null) {
+                // 之前跟踪过的文件在离线期间被轮转切割，从新文件头 0 接续
+                st.lastFileOffset = 0;
+                refreshFingerprint(st);
+                checkpointStore.put(st.path, 0, st.fpLen, st.fingerprint);
+                System.out.println("[LogCollector] 检测到离线期间发生轮转 [" + target.getName() + "]，从头 0 接续采集");
+            } else if (isInitialRuleMount) {
+                // 首次挂载且无历史断点：定位至 EOF，绝不把存量老日志塞满网络
+                st.lastFileOffset = curLen;
+                refreshFingerprint(st);
+                checkpointStore.put(st.path, curLen, st.fpLen, st.fingerprint);
+                System.out.println("[LogCollector] 首次挂载文件 [" + target.getName() + "], 定位至文件末尾 EOF: " + curLen + " 字节");
+            } else {
+                // 规则运行期间全新滚动生成的文件：从 0 开始采集
+                st.lastFileOffset = 0;
+                refreshFingerprint(st);
+                checkpointStore.put(st.path, 0, st.fpLen, st.fingerprint);
+                System.out.println("[LogCollector] 发现新滚动日志文件 [" + target.getName() + "]，从 0 字节增量采集 ✓");
+            }
+            return st;
+        }
+
+        private void pollFileState(SingleFileState st) {
+            try {
+                if (!st.file.exists()) {
+                    st.closeRaf();
+                    return;
+                }
+                long curLen = st.file.length();
+
+                // 文件切割/轮转感知 (Log Rotation: 当前文件长度变小，或头部指纹变化)
+                if (curLen < st.lastFileOffset || (st.fpLen > 0 && !matchesFingerprint(st.file, st.fpLen, st.fingerprint))) {
+                    System.out.println("[LogCollector] 检测到日志文件发生轮转切割 (Rotation): " + st.file.getName() + "，游标重置为 0");
+                    st.closeRaf();
+                    st.partialLine.reset();
+                    st.lastFileOffset = 0;
+                    refreshFingerprint(st);
+                    checkpointStore.put(st.path, 0, st.fpLen, st.fingerprint);
+                }
+
+                if (curLen == st.lastFileOffset) {
+                    checkFlushTimeout(st);
+                    if (st.raf != null && (System.currentTimeMillis() - st.lastActiveMs > IDLE_RAF_CLOSE_MS)) {
+                        st.closeRaf();
+                    }
+                    return;
+                }
+
+                if (st.raf == null) {
+                    st.raf = new RandomAccessFile(st.file, "r");
+                    st.raf.seek(Math.min(st.lastFileOffset, curLen));
+                }
+
+                readAvailable(st, st.raf);
+                st.lastActiveMs = System.currentTimeMillis();
+                if (st.fpLen < 256 && curLen > st.fpLen) {
+                    refreshFingerprint(st);
+                }
+                checkpointStore.put(st.path, st.lastFileOffset, st.fpLen, st.fingerprint);
+            } catch (Exception e) {
+                st.closeRaf();
+                long nowMs = System.currentTimeMillis();
+                if (nowMs - lastWarnTime > 60000) {
+                    System.err.println("[LogCollector] 读取文件 [" + st.file.getName() + "] 异常，将自动重试: " + e);
+                    lastWarnTime = nowMs;
+                }
+            }
+        }
+
+        private void drainFile(SingleFileState st) {
+            try {
+                if (st.file.exists() && st.file.length() > st.lastFileOffset) {
+                    if (st.raf == null) {
+                        st.raf = new RandomAccessFile(st.file, "r");
+                        st.raf.seek(Math.min(st.lastFileOffset, st.file.length()));
+                    }
+                    readAvailable(st, st.raf);
+                    checkpointStore.put(st.path, st.lastFileOffset, st.fpLen, st.fingerprint);
+                }
+                if (st.partialLine.size() > 0) {
+                    emitPartialLine(st);
+                }
+            } catch (Exception ignored) {
+                st.partialLine.reset();
+            }
+        }
+
         /**
          * 分块读取并按 \n 切分完整行（兼容 \r\n）。
-         * 字节先累积到 partialLine，遇到换行才整行按 UTF-8 解码，因此多字节字符不会被块边界截断；
-         * 没有换行结尾的半行保留到下一轮，不会被当成完整的一行。
          */
-        private void readAvailable(RandomAccessFile reader) throws Exception {
+        private void readAvailable(SingleFileState st, RandomAccessFile reader) throws Exception {
             int n;
             while ((n = reader.read(readBuf)) > 0) {
                 int start = 0;
                 for (int i = 0; i < n; i++) {
                     if (readBuf[i] == '\n') {
-                        partialLine.write(readBuf, start, i - start);
-                        emitPartialLine();
+                        st.partialLine.write(readBuf, start, i - start);
+                        emitPartialLine(st);
                         start = i + 1;
                     }
                 }
                 if (start < n) {
-                    partialLine.write(readBuf, start, n - start);
-                    if (partialLine.size() > MAX_LINE_BYTES) {
-                        // 超长行（无换行）强制切断，防止内存无限增长
-                        emitPartialLine();
+                    st.partialLine.write(readBuf, start, n - start);
+                    if (st.partialLine.size() > MAX_LINE_BYTES) {
+                        emitPartialLine(st);
                     }
                 }
             }
-            lastFileOffset = reader.getFilePointer();
+            st.lastFileOffset = reader.getFilePointer();
         }
 
-        private void emitPartialLine() {
-            byte[] bytes = partialLine.toByteArray();
-            partialLine.reset();
+        private void emitPartialLine(SingleFileState st) {
+            byte[] bytes = st.partialLine.toByteArray();
+            st.partialLine.reset();
             int len = bytes.length;
             if (len > 0 && bytes[len - 1] == '\r') len--;
-            processLine(new String(bytes, 0, len, StandardCharsets.UTF_8));
+            processLine(st, new String(bytes, 0, len, StandardCharsets.UTF_8));
         }
 
-        /**
-         * 切换到新的活跃文件前，把旧文件里尚未读完的内容读完，避免日志滚动瞬间丢失尾部日志
-         */
-        private void drainOldFile() {
-            try {
-                if (raf != null) {
-                    readAvailable(raf);
-                }
-                if (partialLine.size() > 0) {
-                    emitPartialLine();
-                }
-            } catch (Exception ignored) {
-                partialLine.reset();
-            }
-        }
-
-        private void processLine(String line) {
+        private void processLine(SingleFileState st, String line) {
             if (line == null) return;
             line = line.trim();
             if (line.isEmpty()) return;
 
-            // 维护上下文捕获状态（如果前面有 ERROR 正在收集后续行）
-            if (pendingPostErrorLines > 0 && pendingErrorRecord != null) {
-                postErrorLines.add(line);
-                pendingPostErrorLines--;
-                if (pendingPostErrorLines == 0) {
-                    // 后续行捕获完毕，补全上下文后再入队发送
-                    flushPendingError();
+            if (st.pendingPostErrorLines > 0 && st.pendingErrorRecord != null) {
+                st.postErrorLines.add(line);
+                st.pendingPostErrorLines--;
+                if (st.pendingPostErrorLines == 0) {
+                    flushPendingError(st);
                 }
             }
 
-            // 多行异常合并逻辑：判断是否是新的日志行首
             boolean isNewHead = DATE_HEAD_PATTERN.matcher(line).find();
             if (isNewHead) {
-                // 刷新之前积累的多行日志
-                flushMultilineRecord();
-                currentFirstLine = line;
-                multilineBuf.setLength(0);
-                multilineBuf.append(line);
-                lastLineTime = System.currentTimeMillis();
+                flushMultilineRecord(st);
+                st.currentFirstLine = line;
+                st.multilineBuf.setLength(0);
+                st.multilineBuf.append(line);
+                st.lastLineTime = System.currentTimeMillis();
             } else {
-                // 非日期行首（例如: \tat com.xxx 或 Caused by: 或 JSON 换行）
-                if (multilineBuf.length() > 0) {
-                    if (multilineBuf.length() < 16384) { // 单条上限 16KB，防 OOM
-                        multilineBuf.append("\n").append(line);
+                if (st.multilineBuf.length() > 0) {
+                    if (st.multilineBuf.length() < 16384) {
+                        st.multilineBuf.append("\n").append(line);
                     }
-                    lastLineTime = System.currentTimeMillis();
+                    st.lastLineTime = System.currentTimeMillis();
                 } else {
-                    // 没有前置行首时单独处理
-                    submitRecord(line, line);
+                    submitRecord(st, line, line);
                 }
             }
 
-            // 更新滑动窗口环形队列
-            synchronized (ringBuffer) {
+            synchronized (st.ringBuffer) {
                 int maxWindow = Math.max(5, Math.min(config.getContextLines(), 30));
-                if (ringBuffer.size() >= maxWindow) {
-                    ringBuffer.pollFirst();
+                if (st.ringBuffer.size() >= maxWindow) {
+                    st.ringBuffer.pollFirst();
                 }
-                ringBuffer.addLast(line);
+                st.ringBuffer.addLast(line);
             }
         }
 
-        private void checkFlushTimeout() {
-            if (multilineBuf.length() > 0 && (System.currentTimeMillis() - lastLineTime > 800)) {
-                flushMultilineRecord();
+        private void checkFlushTimeout(SingleFileState st) {
+            if (st.multilineBuf.length() > 0 && (System.currentTimeMillis() - st.lastLineTime > 800)) {
+                flushMultilineRecord(st);
             }
-            // ERROR 之后日志长时间没有新行：不再继续等待后文，带着已有上下文发出
-            if (pendingErrorRecord != null && System.currentTimeMillis() - pendingErrorSince > 2000) {
-                flushPendingError();
+            if (st.pendingErrorRecord != null && System.currentTimeMillis() - st.pendingErrorSince > 2000) {
+                flushPendingError(st);
             }
         }
 
-        private void flushMultilineRecord() {
-            if (multilineBuf.length() == 0) return;
-            String fullContent = multilineBuf.toString();
-            String head = currentFirstLine != null ? currentFirstLine : fullContent;
-            submitRecord(fullContent, head);
-            multilineBuf.setLength(0);
-            currentFirstLine = null;
+        private void flushMultilineRecord(SingleFileState st) {
+            if (st.multilineBuf.length() == 0) return;
+            String fullContent = st.multilineBuf.toString();
+            String head = st.currentFirstLine != null ? st.currentFirstLine : fullContent;
+            submitRecord(st, fullContent, head);
+            st.multilineBuf.setLength(0);
+            st.currentFirstLine = null;
         }
 
-        private void submitRecord(String fullContent, String firstLine) {
+        private void submitRecord(SingleFileState st, String fullContent, String firstLine) {
             // 1. 过滤排除关键字
             if (config.getExcludeKeyword() != null && !config.getExcludeKeyword().isBlank()) {
                 if (fullContent.contains(config.getExcludeKeyword())) {
@@ -404,12 +513,7 @@ public class LogCollector {
             }
 
             // 2. 提取日志级别
-            String level = "INFO";
-            Matcher levelMatcher = LEVEL_PATTERN.matcher(firstLine);
-            if (levelMatcher.find()) {
-                level = levelMatcher.group(1).toUpperCase();
-                if ("FATAL".equals(level)) level = "ERROR";
-            }
+            String level = extractLogLevel(firstLine);
 
             // 3. 采集模式判断
             String mode = config.getCollectMode() != null ? config.getCollectMode() : "WARN_ERROR";
@@ -470,47 +574,38 @@ public class LogCollector {
             record.setTraceId(traceId);
             record.setLineNumber(lineCounter.incrementAndGet());
             record.setContent(fullContent);
-            record.setTimestamp(System.currentTimeMillis());
+            record.setTimestamp(parseLogTimestamp(firstLine, System.currentTimeMillis()));
 
             // 7. 若是 ERROR，从 RingBuffer 提取上下文快照，并启动后 5 行追踪
             if (isError) {
-                // 上一条还在等后文的 ERROR 先发出，保证不丢
-                flushPendingError();
-                pendingPreLines = snapshotRing();
-                pendingErrorRecord = record;
-                pendingErrorSince = System.currentTimeMillis();
-                pendingPostErrorLines = 5;
-                postErrorLines.clear();
-                // 暂不入队：之前是先入队再回填 contextJson，批次可能在回填前就被序列化发送，上下文会丢
+                flushPendingError(st);
+                st.pendingPreLines = snapshotRing(st);
+                st.pendingErrorRecord = record;
+                st.pendingErrorSince = System.currentTimeMillis();
+                st.pendingPostErrorLines = 5;
+                st.postErrorLines.clear();
                 return;
             }
 
             reportQueue.offer(record);
         }
 
-        /**
-         * 补全 ERROR 的前后文并入队
-         */
-        private void flushPendingError() {
-            if (pendingErrorRecord == null) return;
-            pendingErrorRecord.setContextJson(buildContextJson(pendingPreLines, postErrorLines));
-            reportQueue.offer(pendingErrorRecord);
-            pendingErrorRecord = null;
-            pendingPreLines = null;
-            pendingPostErrorLines = 0;
-            postErrorLines.clear();
+        private void flushPendingError(SingleFileState st) {
+            if (st.pendingErrorRecord == null) return;
+            st.pendingErrorRecord.setContextJson(buildContextJson(st.pendingPreLines, st.postErrorLines));
+            reportQueue.offer(st.pendingErrorRecord);
+            st.pendingErrorRecord = null;
+            st.pendingPreLines = null;
+            st.pendingPostErrorLines = 0;
+            st.postErrorLines.clear();
         }
 
-        private List<String> snapshotRing() {
-            synchronized (ringBuffer) {
-                return new ArrayList<>(ringBuffer);
+        private List<String> snapshotRing(SingleFileState st) {
+            synchronized (st.ringBuffer) {
+                return new ArrayList<>(st.ringBuffer);
             }
         }
 
-        /**
-         * 前文（ERROR 发生时刻的滑动窗口快照）+ 后文。
-         * 以前是"回填时的整个滑动窗口 + 后文"，而窗口此时已包含后文，会造成后文重复。
-         */
         private String buildContextJson(List<String> pre, List<String> post) {
             StringBuilder sb = new StringBuilder();
             sb.append("[");
@@ -536,8 +631,156 @@ public class LogCollector {
         private String escapeJson(String s) {
             return com.monitor.agent.reporter.JsonSerializer.escape(s);
         }
+
+        private void refreshFingerprint(SingleFileState st) {
+            int len = (int) Math.min(256L, st.file.length());
+            st.fpLen = len;
+            st.fingerprint = computeHeaderSha256(st.file, len);
+        }
     }
 
+    private static boolean matchesFingerprint(File file, CheckpointEntry cp) {
+        return matchesFingerprint(file, cp.fpLen, cp.fingerprint);
+    }
+
+    private static boolean matchesFingerprint(File file, int fpLen, String expectedFp) {
+        if (fpLen <= 0) return true;
+        if (file.length() < fpLen || expectedFp == null || expectedFp.isEmpty()) return false;
+        return expectedFp.equals(computeHeaderSha256(file, fpLen));
+    }
+
+    private static String computeHeaderSha256(File file, int len) {
+        if (len <= 0 || !file.exists()) return "";
+        byte[] buf = new byte[len];
+        try (FileInputStream fis = new FileInputStream(file)) {
+            int total = 0;
+            while (total < len) {
+                int r = fis.read(buf, total, len - total);
+                if (r <= 0) break;
+                total += r;
+            }
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(buf, 0, total);
+            byte[] digest = md.digest();
+            StringBuilder hex = new StringBuilder(32);
+            for (int i = 0; i < 16 && i < digest.length; i++) {
+                hex.append(String.format("%02x", digest[i]));
+            }
+            return hex.toString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static class CheckpointEntry {
+        final String path;
+        final long offset;
+        final int fpLen;
+        final String fingerprint;
+        final long updatedAt;
+
+        CheckpointEntry(String path, long offset, int fpLen, String fingerprint, long updatedAt) {
+            this.path = path;
+            this.offset = offset;
+            this.fpLen = fpLen;
+            this.fingerprint = fingerprint;
+            this.updatedAt = updatedAt;
+        }
+    }
+
+    /**
+     * 轻量级文件游标持久化存储：避免 Agent 重启后丢失断档日志或重复读取。
+     * 采用 Base64(path)\toffset\tfpLen\tfingerprint\tupdatedAt 纯文本行格式，原子写盘。
+     */
+    private static class CheckpointStore {
+        private File file;
+        private final Map<String, CheckpointEntry> entries = new ConcurrentHashMap<>();
+        private volatile boolean loaded = false;
+        private volatile boolean dirty = false;
+        private volatile long lastFlushMs = 0;
+
+        CheckpointStore(File file) {
+            this.file = file;
+        }
+
+        synchronized void setFileAndReload(File newFile) {
+            this.file = newFile;
+            this.entries.clear();
+            this.loaded = false;
+            this.dirty = false;
+            loadIfNeeded();
+        }
+
+        synchronized void loadIfNeeded() {
+            if (loaded || file == null) return;
+            loaded = true;
+            if (!file.exists()) return;
+            try {
+                List<String> lines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+                long now = System.currentTimeMillis();
+                long maxAgeMs = 7L * 24 * 3600 * 1000;
+                for (String line : lines) {
+                    if (line == null || line.isBlank() || line.startsWith("#")) continue;
+                    String[] parts = line.split("\t", -1);
+                    if (parts.length < 5) continue;
+                    String path = new String(Base64.getDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+                    long offset = Long.parseLong(parts[1]);
+                    int fpLen = Integer.parseInt(parts[2]);
+                    String fp = parts[3];
+                    long ts = Long.parseLong(parts[4]);
+                    if (now - ts <= maxAgeMs || new File(path).exists()) {
+                        entries.put(path, new CheckpointEntry(path, offset, fpLen, fp, ts));
+                    }
+                }
+                if (!entries.isEmpty()) {
+                    System.out.println("[LogCollector] 已加载 " + entries.size() + " 条日志采集断点游标 ✓");
+                }
+            } catch (Exception e) {
+                System.err.println("[LogCollector] 加载日志断点文件失败（将从 EOF 安全挂载）: " + e.getMessage());
+            }
+        }
+
+        CheckpointEntry get(String path) {
+            return entries.get(path);
+        }
+
+        void put(String path, long offset, int fpLen, String fingerprint) {
+            entries.put(path, new CheckpointEntry(path, offset, fpLen, fingerprint != null ? fingerprint : "", System.currentTimeMillis()));
+            dirty = true;
+        }
+
+        synchronized void flushIfDirty(boolean force) {
+            if (!dirty || file == null) return;
+            long now = System.currentTimeMillis();
+            if (!force && (now - lastFlushMs < 5000)) return;
+            try {
+                File parent = file.getParentFile();
+                if (parent != null && !parent.exists()) {
+                    parent.mkdirs();
+                }
+                StringBuilder sb = new StringBuilder("# LightPulse APM log tailer checkpoints\n");
+                for (CheckpointEntry e : entries.values()) {
+                    String b64Path = Base64.getEncoder().encodeToString(e.path.getBytes(StandardCharsets.UTF_8));
+                    sb.append(b64Path).append('\t')
+                      .append(e.offset).append('\t')
+                      .append(e.fpLen).append('\t')
+                      .append(e.fingerprint).append('\t')
+                      .append(e.updatedAt).append('\n');
+                }
+                File tmp = new File(file.getAbsolutePath() + ".tmp");
+                Files.writeString(tmp.toPath(), sb.toString(), StandardCharsets.UTF_8);
+                try {
+                    Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (Exception ignored) {
+                    Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                }
+                dirty = false;
+                lastFlushMs = now;
+            } catch (Exception e) {
+                // 静默忽略临时写盘失败，下一轮重试
+            }
+        }
+    }
     /**
      * 后台批量异步上报线程 (每 2 秒或满 50 条批量推送)
      */
@@ -563,6 +806,7 @@ public class LogCollector {
                         Thread.sleep(2000L * attempts);
                     }
                 }
+                checkpointStore.flushIfDirty(false);
             } catch (InterruptedException e) {
                 break;
             } catch (Exception e) {
@@ -671,6 +915,56 @@ public class LogCollector {
         sb.append("\"");
     }
 
+    static String extractLogLevel(String firstLine) {
+        if (firstLine == null || firstLine.isEmpty()) return "INFO";
+        Matcher m = LEVEL_PATTERN.matcher(firstLine);
+        if (m.find()) {
+            String raw = m.group(1) != null ? m.group(1)
+                    : (m.group(2) != null ? m.group(2) : m.group(3));
+            if (raw != null) {
+                String level = raw.toUpperCase(Locale.ROOT);
+                if ("FATAL".equals(level)) return "ERROR";
+                if ("WARNING".equals(level)) return "WARN";
+                return level;
+            }
+        }
+        return "INFO";
+    }
+
+    /**
+     * 解析日志行首自带的真实发生时间（支持 ISO-8601 含 Z/+08:00/-05:00 时区及常规日期时间格式），
+     * 解析失败或无行首时间时回退到 fallbackMillis。
+     */
+    static long parseLogTimestamp(String line, long fallbackMillis) {
+        if (line == null || line.isEmpty()) return fallbackMillis;
+        Matcher m = LOG_TS_PATTERN.matcher(line);
+        if (!m.find()) return fallbackMillis;
+        try {
+            int year = Integer.parseInt(m.group(1));
+            int month = Integer.parseInt(m.group(2));
+            int day = Integer.parseInt(m.group(3));
+            int hour = Integer.parseInt(m.group(4));
+            int minute = Integer.parseInt(m.group(5));
+            int second = Integer.parseInt(m.group(6));
+            int nanos = 0;
+            String frac = m.group(7);
+            if (frac != null && !frac.isEmpty()) {
+                String padded = frac.length() >= 9 ? frac.substring(0, 9) : (frac + "000000000").substring(0, 9);
+                nanos = Integer.parseInt(padded);
+            }
+            String tz = m.group(8);
+            if (tz != null && !tz.isEmpty()) {
+                ZoneOffset offset = ZoneOffset.of(tz);
+                return OffsetDateTime.of(year, month, day, hour, minute, second, nanos, offset)
+                        .toInstant().toEpochMilli();
+            }
+            return LocalDateTime.of(year, month, day, hour, minute, second, nanos)
+                    .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (Exception ignored) {
+            return fallbackMillis;
+        }
+    }
+
     public static void shutdown() {
         running.set(false);
         if (scheduler != null) scheduler.shutdownNow();
@@ -678,6 +972,7 @@ public class LogCollector {
             tailer.stop();
         }
         activeTailers.clear();
+        checkpointStore.flushIfDirty(true);
         if (reportThread != null) reportThread.interrupt();
     }
 }

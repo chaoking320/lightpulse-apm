@@ -137,7 +137,7 @@ class PasswordServiceTest {
     @DisplayName("应拒绝常见弱密码")
     void shouldRejectCommonWeakPasswords() {
         // Given
-        String[] weakPasswords = {"password123", "Admin123", "Qwerty123"};
+        String[] weakPasswords = {"Password123", "Admin123", "Qwerty123"};
 
         // When & Then
         for (String weak : weakPasswords) {

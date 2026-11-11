@@ -3706,15 +3706,25 @@ function LogsTab({ isViewer }) {
   const [appName, setAppName] = useState('');
   const [hostName, setHostName] = useState('');
   const [logPath, setLogPath] = useState('');
-  const [logLevel, setLogLevel] = useState('ALL');
+  const [selectedLevels, setSelectedLevels] = useState([]); // 空数组表示 ALL，支持多选如 ['ERROR', 'WARN']
   const [keyword, setKeyword] = useState('');
+  const [excludeKeyword, setExcludeKeyword] = useState('');
   const [traceId, setTraceId] = useState('');
   const [timeRange, setTimeRange] = useState('1h');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [showCustomTime, setShowCustomTime] = useState(false);
+  const [zoomHistory, setZoomHistory] = useState([]);
   const [page, setPage] = useState(1);
   const pageSize = 50;
+
+  // 探索视图模式 & 错误指纹聚类 & 常用视图收藏
+  const [exploreMode, setExploreMode] = useState('stream'); // 'stream' | 'patterns'
+  const [patternsData, setPatternsData] = useState({ loading: false, totalAnalyzed: 0, patterns: [] });
+  const [exporting, setExporting] = useState(false);
+  const [savedViews, setSavedViews] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('LP_LOG_SAVED_VIEWS') || '[]'); } catch (e) { return []; }
+  });
 
   // 查询结果与状态
   const [loading, setLoading] = useState(false);
@@ -3722,8 +3732,20 @@ function LogsTab({ isViewer }) {
   const [liveTail, setLiveTail] = useState(false);
   const [expandedRows, setExpandedRows] = useState({});
 
-  // 上下文查看弹窗
+  // 上下文查看弹窗 & TraceID 全链路关联弹窗
   const [contextModal, setContextModal] = useState({ visible: false, target: null, list: [], loading: false });
+  const [traceModal, setTraceModal] = useState({ visible: false, traceId: '', loading: false, spans: [], slowSqls: [], logs: [] });
+
+  const lastBucketsRef = useRef([]);
+  const lastIntervalSecRef = useRef(60);
+
+  const toggleLevel = (lv) => {
+    if (lv === 'ALL') {
+      setSelectedLevels([]);
+      return;
+    }
+    setSelectedLevels(prev => prev.includes(lv) ? prev.filter(x => x !== lv) : [...prev, lv]);
+  };
 
   // 采集规则管理
   const [configs, setConfigs] = useState([]);
@@ -3749,81 +3771,56 @@ function LogsTab({ isViewer }) {
     }).catch(ignored => {});
   }, []);
 
-  // 执行日志检索
-  const doSearch = useCallback((p = 1) => {
-    setLoading(true);
+  const computeTimeParams = useCallback(() => {
     let start = 'now-1h';
     let end = 'now';
     let interval = '1m';
+    let intervalSec = 60;
 
-    if (timeRange === '15m') { start = 'now-15m'; interval = '30s'; }
-    else if (timeRange === '1h') { start = 'now-1h'; interval = '1m'; }
-    else if (timeRange === '6h') { start = 'now-6h'; interval = '5m'; }
-    else if (timeRange === '24h') { start = 'now-24h'; interval = '20m'; }
-    else if (timeRange === '3d') { start = 'now-3d'; interval = '1h'; }
-    else if (timeRange === '7d') { start = 'now-7d'; interval = '3h'; }
+    if (timeRange === '15m') { start = 'now-15m'; interval = '30s'; intervalSec = 30; }
+    else if (timeRange === '1h') { start = 'now-1h'; interval = '1m'; intervalSec = 60; }
+    else if (timeRange === '6h') { start = 'now-6h'; interval = '5m'; intervalSec = 300; }
+    else if (timeRange === '24h') { start = 'now-24h'; interval = '20m'; intervalSec = 1200; }
+    else if (timeRange === '3d') { start = 'now-3d'; interval = '1h'; intervalSec = 3600; }
+    else if (timeRange === '7d') { start = 'now-7d'; interval = '3h'; intervalSec = 10800; }
     else if (timeRange === 'custom') {
       if (customStart) start = customStart;
       if (customEnd) end = customEnd;
       let diffHours = 24;
       if (customStart && customEnd) {
-        diffHours = Math.max(0.5, (new Date(customEnd) - new Date(customStart)) / 3600000);
+        diffHours = Math.max(0.05, (new Date(customEnd) - new Date(customStart)) / 3600000);
       }
-      if (diffHours <= 0.5) interval = '30s';
-      else if (diffHours <= 2) interval = '1m';
-      else if (diffHours <= 6) interval = '5m';
-      else if (diffHours <= 24) interval = '20m';
-      else if (diffHours <= 72) interval = '1h';
-      else if (diffHours <= 168) interval = '3h';
-      else interval = '1d';
+      if (diffHours <= 0.5) { interval = '30s'; intervalSec = 30; }
+      else if (diffHours <= 2) { interval = '1m'; intervalSec = 60; }
+      else if (diffHours <= 6) { interval = '5m'; intervalSec = 300; }
+      else if (diffHours <= 24) { interval = '20m'; intervalSec = 1200; }
+      else if (diffHours <= 72) { interval = '1h'; intervalSec = 3600; }
+      else if (diffHours <= 168) { interval = '3h'; intervalSec = 10800; }
+      else { interval = '1d'; intervalSec = 86400; }
     }
+    return { start, end, interval, intervalSec };
+  }, [timeRange, customStart, customEnd]);
 
-    let url = `/api/v1/logs/search?page=${p}&size=${pageSize}&startTime=${encodeURIComponent(start)}&endTime=${encodeURIComponent(end)}`;
-    if (appName) url += `&appName=${encodeURIComponent(appName)}`;
-    if (hostName) url += `&hostName=${encodeURIComponent(hostName)}`;
-    if (logPath) url += `&logPath=${encodeURIComponent(logPath)}`;
-    if (logLevel && logLevel !== 'ALL') url += `&logLevel=${encodeURIComponent(logLevel)}`;
-    if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`;
-    if (traceId) url += `&traceId=${encodeURIComponent(traceId)}`;
+  const buildFilterQuery = useCallback((start, end) => {
+    let qs = `startTime=${encodeURIComponent(start)}&endTime=${encodeURIComponent(end)}`;
+    if (appName) qs += `&appName=${encodeURIComponent(appName)}`;
+    if (hostName) qs += `&hostName=${encodeURIComponent(hostName)}`;
+    if (logPath) qs += `&logPath=${encodeURIComponent(logPath)}`;
+    if (selectedLevels.length > 0) qs += `&logLevel=${encodeURIComponent(selectedLevels.join(','))}`;
+    if (keyword) qs += `&keyword=${encodeURIComponent(keyword)}`;
+    if (excludeKeyword) qs += `&excludeKeyword=${encodeURIComponent(excludeKeyword)}`;
+    if (traceId) qs += `&traceId=${encodeURIComponent(traceId)}`;
+    return qs;
+  }, [appName, hostName, logPath, selectedLevels, keyword, excludeKeyword, traceId]);
 
-    api(url).then(r => {
-      if (r && r.code === 200) {
-        setLogsData(r);
-        setPage(p);
-      }
-    }).finally(() => setLoading(false));
+  const formatLocalInput = (d) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
-    // 同时拉取柱状图
-    let histUrl = `/api/v1/logs/histogram?startTime=${encodeURIComponent(start)}&endTime=${encodeURIComponent(end)}&interval=${interval}`;
-    if (appName) histUrl += `&appName=${encodeURIComponent(appName)}`;
-    if (hostName) histUrl += `&hostName=${encodeURIComponent(hostName)}`;
-    if (logPath) histUrl += `&logPath=${encodeURIComponent(logPath)}`;
-    if (keyword) histUrl += `&keyword=${encodeURIComponent(keyword)}`;
-
-    api(histUrl).then(r => {
-      if (r && r.code === 200 && r.buckets) {
-        renderHistogramChart(r.buckets);
-      }
-    }).catch(ignored => {});
-  }, [appName, hostName, logPath, logLevel, keyword, traceId, timeRange, customStart, customEnd]);
-
-  useEffect(() => {
-    if (subTab === 'explore') {
-      doSearch(1);
-    }
-  }, [subTab, doSearch]);
-
-  // 实时 Tail 轮询 (每 3 秒刷新第一页)
-  useEffect(() => {
-    if (!liveTail || subTab !== 'explore') return;
-    const timer = setInterval(() => {
-      doSearch(1);
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [liveTail, subTab, doSearch]);
-
-  // ECharts 柱状图渲染
+  // ECharts 柱状图渲染（支持点击柱子下钻对应时间窗口）
   const renderHistogramChart = (buckets) => {
+    lastBucketsRef.current = buckets || [];
     const el = document.getElementById('log-histogram-chart');
     if (!el || !window.echarts) return;
     let chart = echarts.getInstanceByDom(el);
@@ -3847,11 +3844,151 @@ function LogsTab({ isViewer }) {
       xAxis: { type: 'category', data: times, axisLabel: { fontSize: 10 } },
       yAxis: { type: 'value', minInterval: 1, splitLine: { lineStyle: { type: 'dashed' } } },
       series: [
-        { name: 'INFO', type: 'bar', stack: 'total', data: infos, itemStyle: { color: '#10b981' } },
-        { name: 'WARN', type: 'bar', stack: 'total', data: warns, itemStyle: { color: '#f59e0b' } },
-        { name: 'ERROR', type: 'bar', stack: 'total', data: errors, itemStyle: { color: '#ef4444' } }
+        { name: 'INFO', type: 'bar', stack: 'total', data: infos, itemStyle: { color: '#10b981' }, cursor: 'pointer' },
+        { name: 'WARN', type: 'bar', stack: 'total', data: warns, itemStyle: { color: '#f59e0b' }, cursor: 'pointer' },
+        { name: 'ERROR', type: 'bar', stack: 'total', data: errors, itemStyle: { color: '#ef4444' }, cursor: 'pointer' }
       ]
     });
+
+    chart.off('click');
+    chart.on('click', (params) => {
+      const b = lastBucketsRef.current[params.dataIndex];
+      if (!b || !b.time) return;
+      const raw = b.time.length >= 19 ? b.time.substring(0, 19) : b.time;
+      const startDt = new Date(raw);
+      if (isNaN(startDt.getTime())) return;
+      const spanMs = Math.max(60000, lastIntervalSecRef.current * 1000);
+      const endDt = new Date(startDt.getTime() + spanMs);
+      setZoomHistory(prev => [...prev, { timeRange, customStart, customEnd }]);
+      setCustomStart(formatLocalInput(startDt));
+      setCustomEnd(formatLocalInput(endDt));
+      setTimeRange('custom');
+      setShowCustomTime(true);
+    });
+  };
+
+  // 执行日志检索
+  const doSearch = useCallback((p = 1) => {
+    setLoading(true);
+    const { start, end, interval, intervalSec } = computeTimeParams();
+    lastIntervalSecRef.current = intervalSec;
+    const filterQs = buildFilterQuery(start, end);
+
+    api(`/api/v1/logs/search?page=${p}&size=${pageSize}&${filterQs}`).then(r => {
+      if (r && r.code === 200) {
+        setLogsData(r);
+        setPage(p);
+      }
+    }).finally(() => setLoading(false));
+
+    api(`/api/v1/logs/histogram?interval=${interval}&${filterQs}`).then(r => {
+      if (r && r.code === 200 && r.buckets) {
+        renderHistogramChart(r.buckets);
+      }
+    }).catch(ignored => {});
+
+    if (exploreMode === 'patterns') {
+      setPatternsData(prev => ({ ...prev, loading: true }));
+      api(`/api/v1/logs/patterns?limit=20&${filterQs}`).then(r => {
+        if (r && r.code === 200) {
+          setPatternsData({ loading: false, totalAnalyzed: r.totalAnalyzed || 0, patterns: r.patterns || [] });
+        } else {
+          setPatternsData(prev => ({ ...prev, loading: false }));
+        }
+      }).catch(() => setPatternsData(prev => ({ ...prev, loading: false })));
+    }
+  }, [computeTimeParams, buildFilterQuery, exploreMode]);
+
+  useEffect(() => {
+    if (subTab === 'explore') {
+      doSearch(1);
+    }
+  }, [subTab, doSearch]);
+
+  // 实时 Tail 轮询 (每 3 秒刷新第一页)
+  useEffect(() => {
+    if (!liveTail || subTab !== 'explore') return;
+    const timer = setInterval(() => {
+      doSearch(1);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [liveTail, subTab, doSearch]);
+
+  const handleExportLogs = () => {
+    const { start, end } = computeTimeParams();
+    const filterQs = buildFilterQuery(start, end);
+    const token = localStorage.getItem('LP_TOKEN') || '';
+    setExporting(true);
+    fetch(BASE + '/api/v1/logs/export?' + filterQs, {
+      headers: { 'Authorization': token ? ('Bearer ' + token) : '', 'X-Token': token }
+    }).then(r => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    }).then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `lightpulse-logs-${new Date().toISOString().slice(0,19).replace(/[:T]/g, '-')}.log`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }).catch(e => {
+      alert('导出日志失败: ' + e.message);
+    }).finally(() => setExporting(false));
+  };
+
+  const handleSaveCurrentView = () => {
+    const name = window.prompt('为当前筛选视图起个名称 (例如: RAGFlow-ERROR-6h):');
+    if (!name || !name.trim()) return;
+    const view = {
+      id: Date.now(),
+      name: name.trim(),
+      appName, hostName, logPath, selectedLevels, keyword, excludeKeyword, traceId, timeRange, customStart, customEnd
+    };
+    const next = [...savedViews.filter(v => v.name !== view.name), view];
+    setSavedViews(next);
+    try { localStorage.setItem('LP_LOG_SAVED_VIEWS', JSON.stringify(next)); } catch (e) {}
+  };
+
+  const applySavedView = (v) => {
+    setAppName(v.appName || '');
+    setHostName(v.hostName || '');
+    setLogPath(v.logPath || '');
+    setSelectedLevels(Array.isArray(v.selectedLevels) ? v.selectedLevels : []);
+    setKeyword(v.keyword || '');
+    setExcludeKeyword(v.excludeKeyword || '');
+    setTraceId(v.traceId || '');
+    setTimeRange(v.timeRange || '1h');
+    setCustomStart(v.customStart || '');
+    setCustomEnd(v.customEnd || '');
+    setShowCustomTime(v.timeRange === 'custom');
+  };
+
+  const removeSavedView = (id, e) => {
+    e.stopPropagation();
+    const next = savedViews.filter(v => v.id !== id);
+    setSavedViews(next);
+    try { localStorage.setItem('LP_LOG_SAVED_VIEWS', JSON.stringify(next)); } catch (err) {}
+  };
+
+  const openTraceModal = (tid) => {
+    if (!tid) return;
+    setTraceModal({ visible: true, traceId: tid, loading: true, spans: [], slowSqls: [], logs: [] });
+    api(`/api/v1/logs/trace-detail?traceId=${encodeURIComponent(tid)}`).then(r => {
+      if (r && r.code === 200) {
+        setTraceModal({
+          visible: true,
+          traceId: tid,
+          loading: false,
+          spans: r.spans || [],
+          slowSqls: r.slowSqls || [],
+          logs: r.logs || []
+        });
+      } else {
+        setTraceModal(prev => ({ ...prev, loading: false }));
+      }
+    }).catch(() => setTraceModal(prev => ({ ...prev, loading: false })));
   };
 
   // 查看上下文 (Show Context)
@@ -3995,21 +4132,22 @@ function LogsTab({ isViewer }) {
               meta.logPaths.map(p => React.createElement('option', { key: p, value: p }, p))
             )
           ),
-          // 日志级别选择
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
-            ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'].map(lv =>
-              React.createElement('button', {
+          // 日志级别选择（支持多选，如同时勾选 ERROR + WARN）
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4 }, title: '支持多选日志级别' },
+            ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'].map(lv => {
+              const active = lv === 'ALL' ? selectedLevels.length === 0 : selectedLevels.includes(lv);
+              return React.createElement('button', {
                 key: lv,
-                className: 'btn small' + (logLevel === lv ? ' primary' : ''),
+                className: 'btn small' + (active ? ' primary' : ''),
                 style: {
-                  background: logLevel === lv ? (lv === 'ERROR' ? '#ef4444' : lv === 'WARN' ? '#f59e0b' : lv === 'INFO' ? '#10b981' : '#2563eb') : '#f8fafc',
-                  borderColor: logLevel === lv ? 'transparent' : '#cbd5e1',
-                  color: logLevel === lv ? '#fff' : '#475569',
-                  fontWeight: logLevel === lv ? 600 : 400
+                  background: active ? (lv === 'ERROR' ? '#ef4444' : lv === 'WARN' ? '#f59e0b' : lv === 'INFO' ? '#10b981' : '#2563eb') : '#f8fafc',
+                  borderColor: active ? 'transparent' : '#cbd5e1',
+                  color: active ? '#fff' : '#475569',
+                  fontWeight: active ? 600 : 400
                 },
-                onClick: () => setLogLevel(lv)
-              }, lv)
-            )
+                onClick: () => toggleLevel(lv)
+              }, lv);
+            })
           ),
           // 时间范围快捷选择
           React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' } },
@@ -4017,7 +4155,7 @@ function LogsTab({ isViewer }) {
               React.createElement('button', {
                 key: t,
                 className: 'btn small' + (timeRange === t ? ' primary' : ''),
-                onClick: () => { setTimeRange(t); setShowCustomTime(false); }
+                onClick: () => { setZoomHistory([]); setTimeRange(t); setShowCustomTime(false); }
               }, t)
             ),
             React.createElement('button', {
@@ -4082,52 +4220,105 @@ function LogsTab({ isViewer }) {
           }, '昨天')
         ),
 
-        // 第二行：关键词搜索框 + TraceID + 查询按钮 + 实时 Tail
-        React.createElement('div', { style: { display: 'flex', gap: 10, marginTop: 10, alignItems: 'center' } },
+        // 第二行：关键词搜索 + 排除关键词 + TraceID + 查询/Tail/收藏视图
+        React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' } },
           React.createElement('input', {
-            style: { flex: 2, padding: '7px 12px', borderRadius: 4, border: '1px solid #cbd5e1', fontSize: 13 },
-            placeholder: '🔍 关键词匹配搜索 (支持 Exception, NPE, OrderFailed 等)...',
+            style: { flex: 2, minWidth: 180, padding: '7px 12px', borderRadius: 4, border: '1px solid #cbd5e1', fontSize: 13 },
+            placeholder: '🔍 关键词匹配搜索 (支持 Exception, NPE, OrderFailed)...',
             value: keyword,
             onChange: e => setKeyword(e.target.value),
             onKeyDown: e => { if (e.key === 'Enter') doSearch(1); }
           }),
           React.createElement('input', {
-            style: { flex: 1, padding: '7px 12px', borderRadius: 4, border: '1px solid #cbd5e1', fontSize: 13 },
-            placeholder: '🔗 TraceID 过滤 (精准追踪链路)...',
+            style: { flex: 1.3, minWidth: 150, padding: '7px 12px', borderRadius: 4, border: '1px solid #cbd5e1', fontSize: 13 },
+            placeholder: '🚫 排除关键词 (多个用 | 分隔)...',
+            value: excludeKeyword,
+            onChange: e => setExcludeKeyword(e.target.value),
+            onKeyDown: e => { if (e.key === 'Enter') doSearch(1); }
+          }),
+          React.createElement('input', {
+            style: { flex: 1.2, minWidth: 140, padding: '7px 12px', borderRadius: 4, border: '1px solid #cbd5e1', fontSize: 13 },
+            placeholder: '🔗 TraceID 过滤...',
             value: traceId,
             onChange: e => setTraceId(e.target.value),
             onKeyDown: e => { if (e.key === 'Enter') doSearch(1); }
           }),
           React.createElement('button', {
             className: 'btn primary',
-            style: { padding: '7px 18px', fontWeight: 600 },
+            style: { padding: '7px 16px', fontWeight: 600 },
             disabled: loading,
             onClick: () => doSearch(1)
           }, loading ? '检索中...' : '🔍 检索日志'),
           React.createElement('button', {
             className: 'btn',
             style: {
-              padding: '7px 14px',
+              padding: '7px 12px',
               fontWeight: 600,
               background: liveTail ? '#10b981' : '#f8fafc',
               color: liveTail ? '#fff' : '#475569',
               borderColor: liveTail ? '#059669' : '#cbd5e1'
             },
             onClick: () => setLiveTail(!liveTail)
-          }, liveTail ? '🟢 实时 Tail 中 (3s)' : '⚡ 开启实时 Tail')
+          }, liveTail ? '🟢 实时 Tail (3s)' : '⚡ 实时 Tail'),
+          React.createElement('button', {
+            className: 'btn',
+            style: { padding: '7px 10px', fontSize: 12 },
+            title: '将当前过滤条件保存为常用快捷视图',
+            onClick: handleSaveCurrentView
+          }, '⭐ 收藏视图')
+        ),
+
+        // 常用排查视图快捷栏
+        savedViews.length > 0 && React.createElement('div', {
+          style: { display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap', fontSize: 12 }
+        },
+          React.createElement('span', { style: { color: '#64748b', fontWeight: 500 } }, '⭐ 常用视图:'),
+          savedViews.map(v =>
+            React.createElement('span', {
+              key: v.id,
+              onClick: () => applySavedView(v),
+              style: {
+                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '2px 8px',
+                borderRadius: 12, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe',
+                cursor: 'pointer', fontWeight: 500
+              }
+            },
+              v.name,
+              React.createElement('span', {
+                onClick: (e) => removeSavedView(v.id, e),
+                style: { color: '#94a3b8', fontWeight: 700, paddingLeft: 2 },
+                title: '删除此收藏视图'
+              }, '×')
+            )
+          )
         )
       ),
 
-      // 日志时间分布柱状图 (Log Volume)
+      // 日志时间分布柱状图 (Log Volume，支持点击下钻)
       React.createElement('div', { className: 'chart-box', style: { padding: 12, marginBottom: 12 } },
-        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', marginBottom: 6 } },
-          React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#334155' } }, '📊 日志量时间分布趋势 (Log Volume Histogram)'),
+        React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 8 } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { style: { fontSize: 13, fontWeight: 600, color: '#334155' } }, '📊 日志量时间分布趋势 (Log Volume Histogram)'),
+            React.createElement('span', { style: { fontSize: 11, color: '#94a3b8' } }, '点击任意柱子可下钻该时间段'),
+            zoomHistory.length > 0 && React.createElement('button', {
+              className: 'btn small',
+              style: { padding: '2px 8px', fontSize: 11, background: '#fef3c7', borderColor: '#fcd34d', color: '#92400e' },
+              onClick: () => {
+                const prev = zoomHistory[zoomHistory.length - 1];
+                setZoomHistory(h => h.slice(0, -1));
+                setTimeRange(prev.timeRange);
+                setCustomStart(prev.customStart);
+                setCustomEnd(prev.customEnd);
+                setShowCustomTime(prev.timeRange === 'custom');
+              }
+            }, '↩ 返回上一时间段')
+          ),
           React.createElement('span', { style: { fontSize: 12, color: '#64748b' } }, '共匹配到 ' + (logsData.total || 0) + ' 条日志')
         ),
         React.createElement('div', { id: 'log-histogram-chart', style: { height: 130, width: '100%' } })
       ),
 
-      // 类 Grafana 暗黑终端日志流
+      // 类 Grafana 暗黑终端日志流 / 错误指纹聚类切换面板
       React.createElement('div', {
         style: {
           background: '#0f172a',
@@ -4146,23 +4337,51 @@ function LogsTab({ isViewer }) {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 8,
             borderBottom: '1px solid #334155',
             paddingBottom: 10,
             marginBottom: 10
           }
         },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
+          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
             React.createElement('span', { style: { color: '#38bdf8', fontWeight: 600 } }, '● TERMINAL LOG STREAM'),
-            React.createElement('span', { style: { color: '#94a3b8' } }, `| 第 ${page} 页 (共 ${logsData.total || 0} 条)`)
+            React.createElement('div', { style: { display: 'inline-flex', background: '#1e293b', borderRadius: 6, padding: 2, border: '1px solid #334155' } },
+              React.createElement('button', {
+                className: 'btn small',
+                style: {
+                  background: exploreMode === 'stream' ? '#0284c7' : 'transparent',
+                  color: '#f8fafc', borderColor: 'transparent', fontSize: 11, padding: '3px 10px'
+                },
+                onClick: () => setExploreMode('stream')
+              }, '📜 实时日志流'),
+              React.createElement('button', {
+                className: 'btn small',
+                style: {
+                  background: exploreMode === 'patterns' ? '#7c3aed' : 'transparent',
+                  color: '#f8fafc', borderColor: 'transparent', fontSize: 11, padding: '3px 10px'
+                },
+                onClick: () => setExploreMode('patterns')
+              }, '🧬 错误指纹聚类')
+            ),
+            exploreMode === 'stream'
+              ? React.createElement('span', { style: { color: '#94a3b8' } }, `第 ${page} 页 (共 ${logsData.total || 0} 条)`)
+              : React.createElement('span', { style: { color: '#94a3b8' } }, `已分析最近 ${patternsData.totalAnalyzed || 0} 条日志 · 聚合成 ${(patternsData.patterns || []).length} 类模式`)
           ),
           React.createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
             React.createElement('button', {
+              className: 'btn small',
+              style: { background: '#1e293b', color: '#38bdf8', borderColor: '#334155' },
+              disabled: exporting,
+              onClick: handleExportLogs
+            }, exporting ? '导出中...' : '📥 导出日志'),
+            exploreMode === 'stream' && React.createElement('button', {
               className: 'btn small',
               style: { background: '#1e293b', color: '#f8fafc', borderColor: '#475569' },
               disabled: page <= 1,
               onClick: () => doSearch(page - 1)
             }, '◀ 上一页'),
-            React.createElement('button', {
+            exploreMode === 'stream' && React.createElement('button', {
               className: 'btn small',
               style: { background: '#1e293b', color: '#f8fafc', borderColor: '#475569' },
               disabled: (logsData.data || []).length < pageSize,
@@ -4171,8 +4390,63 @@ function LogsTab({ isViewer }) {
           )
         ),
 
-        // 日志列表内容
-        (!logsData.data || logsData.data.length === 0)
+        // 视图 1：错误指纹聚类排行
+        exploreMode === 'patterns' && (
+          patternsData.loading
+            ? React.createElement('div', { style: { textAlign: 'center', padding: '40px 0', color: '#94a3b8' } }, '正在提取错误指纹并聚类...')
+            : (!patternsData.patterns || patternsData.patterns.length === 0)
+              ? React.createElement('div', { style: { textAlign: 'center', padding: '40px 0', color: '#64748b' } }, '当前时间窗口内暂无匹配的错误/告警模式。')
+              : patternsData.patterns.map((pat, pIdx) => {
+                  const maxCnt = Math.max(1, patternsData.patterns[0].count || 1);
+                  const pct = Math.max(4, Math.round((pat.count * 100) / maxCnt));
+                  const lvColor = pat.logLevel === 'ERROR' ? '#ef4444' : pat.logLevel === 'WARN' ? '#f59e0b' : '#10b981';
+                  return React.createElement('div', {
+                    key: pIdx,
+                    style: {
+                      padding: '10px 12px',
+                      borderBottom: '1px solid #1e293b',
+                      background: pIdx % 2 === 0 ? 'rgba(30,41,59,0.28)' : 'transparent',
+                      borderRadius: 4
+                    }
+                  },
+                    React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' } },
+                      React.createElement('span', { style: { color: '#94a3b8', minWidth: 26 } }, `#${pIdx + 1}`),
+                      React.createElement('span', { style: { background: lvColor, color: '#fff', padding: '1px 7px', borderRadius: 3, fontWeight: 700, fontSize: 10 } }, pat.logLevel),
+                      React.createElement('span', { style: { background: '#312e81', color: '#c4b5fd', padding: '1px 8px', borderRadius: 10, fontWeight: 700, fontSize: 11 } }, `${pat.count} 次`),
+                      React.createElement('div', { style: { width: 90, height: 6, background: '#1e293b', borderRadius: 3, overflow: 'hidden' } },
+                        React.createElement('div', { style: { width: pct + '%', height: '100%', background: lvColor } })
+                      ),
+                      pat.apps && pat.apps.length > 0 && React.createElement('span', { style: { color: '#38bdf8', fontSize: 11 } }, pat.apps.join(', ')),
+                      React.createElement('span', { style: { color: '#64748b', fontSize: 11, marginLeft: 'auto' } },
+                        `首次: ${pat.firstSeen || '-'} | 最近: ${pat.lastSeen || '-'}`
+                      )
+                    ),
+                    React.createElement('div', { style: { color: '#e2e8f0', wordBreak: 'break-all', marginBottom: 6 } }, pat.pattern),
+                    React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' } },
+                      React.createElement('span', { style: { color: '#94a3b8', fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                        '样本: ' + (pat.sampleContent || '').split('\n')[0]
+                      ),
+                      pat.sampleTraceId && React.createElement('button', {
+                        className: 'btn small',
+                        style: { background: '#1e293b', color: '#38bdf8', borderColor: '#334155', fontSize: 11 },
+                        onClick: () => openTraceModal(pat.sampleTraceId)
+                      }, `🔗 链路 (${pat.sampleTraceId.slice(0, 12)}...)`),
+                      React.createElement('button', {
+                        className: 'btn small',
+                        style: { background: '#1e293b', color: '#f8fafc', borderColor: '#475569', fontSize: 11 },
+                        onClick: () => {
+                          const seg = (pat.pattern || '').replace(/<[A-Z]+>/g, ' ').trim().split(/\s+/).filter(w => w.length >= 4).slice(0, 3).join(' ');
+                          if (seg) setKeyword(seg);
+                          setExploreMode('stream');
+                        }
+                      }, '🔍 查同类明细')
+                    )
+                  );
+                })
+        ),
+
+        // 视图 2：日志列表内容
+        exploreMode === 'stream' && ((!logsData.data || logsData.data.length === 0)
           ? React.createElement('div', { style: { textAlign: 'center', padding: '40px 0', color: '#64748b' } },
               '⚠️ 暂无日志数据。请确认：1. 已在「采集规则配置」中启用目标路径；2. Agent 探针正常运行并已连接。')
           : logsData.data.map((item, idx) => {
@@ -4234,8 +4508,8 @@ function LogsTab({ isViewer }) {
                     cursor: 'pointer',
                     fontSize: 11
                   },
-                  title: '点击以过滤该 TraceID',
-                  onClick: () => { setTraceId(item.traceId); doSearch(1); }
+                  title: '点击查看 TraceID 全链路关联 (调用链 + 慢 SQL + 关联日志)',
+                  onClick: () => openTraceModal(item.traceId)
                 }, `tid:${item.traceId}`),
                 // 正文
                 React.createElement('div', {
@@ -4266,6 +4540,7 @@ function LogsTab({ isViewer }) {
                 }, '🔍 上下文')
               );
             })
+        )
       )
     ),
 
@@ -4417,6 +4692,89 @@ function LogsTab({ isViewer }) {
                     }
                   }, cRow.content)
                 )
+              )
+            )
+      )
+    ),
+
+    // TraceID 全链路关联诊断弹窗 (Metrics + Traces + Logs)
+    traceModal.visible && React.createElement('div', { className: 'modal-overlay' },
+      React.createElement('div', {
+        className: 'modal',
+        style: { width: 960, maxHeight: '86vh', overflowY: 'auto', background: '#0f172a', color: '#f8fafc' }
+      },
+        React.createElement('div', {
+          style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #334155', paddingBottom: 10, marginBottom: 14, flexWrap: 'wrap', gap: 8 }
+        },
+          React.createElement('h3', { style: { margin: 0, color: '#38bdf8', fontSize: 15 } },
+            `🔗 全链路关联诊断 [TraceID: ${traceModal.traceId}]`
+          ),
+          React.createElement('div', { style: { display: 'flex', gap: 8 } },
+            React.createElement('button', {
+              className: 'btn small primary',
+              onClick: () => {
+                setTraceId(traceModal.traceId);
+                setExploreMode('stream');
+                setTraceModal({ visible: false, traceId: '', loading: false, spans: [], slowSqls: [], logs: [] });
+              }
+            }, '仅在日志流中过滤此 TraceID'),
+            React.createElement('button', {
+              className: 'btn small',
+              style: { background: '#1e293b', color: '#fff', borderColor: '#475569' },
+              onClick: () => setTraceModal({ visible: false, traceId: '', loading: false, spans: [], slowSqls: [], logs: [] })
+            }, '✕ 关闭')
+          )
+        ),
+        traceModal.loading
+          ? React.createElement('div', { style: { textAlign: 'center', padding: 36, color: '#94a3b8' } }, '正在串联调用链、慢 SQL 与关联日志...')
+          : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 16, fontSize: 12 } },
+              React.createElement('div', {},
+                React.createElement('div', { style: { color: '#38bdf8', fontWeight: 600, marginBottom: 6 } }, `⚡ 方法调用链 Spans (${traceModal.spans.length})`),
+                traceModal.spans.length === 0
+                  ? React.createElement('div', { style: { color: '#64748b', padding: '8px 12px', background: '#090d16', borderRadius: 6 } }, '暂无匹配的 JavaAgent Span 记录（非 Java 链路或采样未命中）')
+                  : React.createElement('div', { style: { background: '#090d16', borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 } },
+                      traceModal.spans.map((sp, i) =>
+                        React.createElement('div', { key: i, style: { display: 'flex', gap: 10, alignItems: 'center', padding: '4px 6px', borderBottom: '1px solid #1e293b', flexWrap: 'wrap' } },
+                          React.createElement('span', { style: { background: sp.success === false ? '#ef4444' : '#10b981', color: '#fff', padding: '0 5px', borderRadius: 3, fontSize: 10, fontWeight: 700 } }, sp.success === false ? 'ERR' : 'OK'),
+                          React.createElement('span', { style: { color: '#f59e0b', fontWeight: 700, minWidth: 55 } }, `${sp.cost_ms || 0} ms`),
+                          React.createElement('span', { style: { color: '#38bdf8' } }, sp.app_name || ''),
+                          React.createElement('span', { style: { color: '#e2e8f0', fontFamily: 'monospace' } }, `${sp.class_name || ''}.${sp.method_name || ''}()`),
+                          sp.http_path && React.createElement('span', { style: { color: '#94a3b8' } }, `${sp.http_method || ''} ${sp.http_path}`),
+                          sp.error_msg && React.createElement('span', { style: { color: '#fca5a5', width: '100%' } }, sp.error_msg)
+                        )
+                      )
+                    )
+              ),
+              React.createElement('div', {},
+                React.createElement('div', { style: { color: '#f59e0b', fontWeight: 600, marginBottom: 6 } }, `🐢 关联慢 SQL (${traceModal.slowSqls.length})`),
+                traceModal.slowSqls.length === 0
+                  ? React.createElement('div', { style: { color: '#64748b', padding: '8px 12px', background: '#090d16', borderRadius: 6 } }, '该链路无慢 SQL 记录')
+                  : React.createElement('div', { style: { background: '#090d16', borderRadius: 6, padding: 8, display: 'flex', flexDirection: 'column', gap: 6 } },
+                      traceModal.slowSqls.map((sq, i) =>
+                        React.createElement('div', { key: i, style: { padding: '6px 8px', borderBottom: '1px solid #1e293b' } },
+                          React.createElement('div', { style: { display: 'flex', gap: 10, marginBottom: 4 } },
+                            React.createElement('span', { style: { color: '#f59e0b', fontWeight: 700 } }, `${sq.cost_ms || 0} ms`),
+                            React.createElement('span', { style: { color: '#38bdf8' } }, sq.app_name || ''),
+                            React.createElement('span', { style: { color: '#64748b' } }, sq.occurred_at || '')
+                          ),
+                          React.createElement('div', { style: { color: '#fde68a', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' } }, sq.sql_text || '')
+                        )
+                      )
+                    )
+              ),
+              React.createElement('div', {},
+                React.createElement('div', { style: { color: '#10b981', fontWeight: 600, marginBottom: 6 } }, `📜 关联日志流 (${traceModal.logs.length})`),
+                traceModal.logs.length === 0
+                  ? React.createElement('div', { style: { color: '#64748b', padding: '8px 12px', background: '#090d16', borderRadius: 6 } }, '近 7 天暂无更多关联日志')
+                  : React.createElement('div', { style: { background: '#090d16', borderRadius: 6, padding: 8, maxHeight: 280, overflowY: 'auto', fontFamily: 'monospace' } },
+                      traceModal.logs.map((lg, i) =>
+                        React.createElement('div', { key: i, style: { display: 'flex', gap: 8, padding: '4px 6px', borderBottom: '1px solid #1e293b', alignItems: 'flex-start' } },
+                          React.createElement('span', { style: { color: lg.logLevel === 'ERROR' ? '#ef4444' : lg.logLevel === 'WARN' ? '#f59e0b' : '#10b981', fontWeight: 700, minWidth: 42 } }, lg.logLevel || 'INFO'),
+                          React.createElement('span', { style: { color: '#64748b', minWidth: 135 } }, lg.createdAt || ''),
+                          React.createElement('div', { style: { color: lg.logLevel === 'ERROR' ? '#fca5a5' : '#e2e8f0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1 } }, lg.content || '')
+                        )
+                      )
+                    )
               )
             )
       )
@@ -5304,7 +5662,7 @@ function App() {
           React.createElement('div', {style:{display:'flex', alignItems:'center', gap:8}},
             React.createElement('h1',{style:{margin:0, fontSize:18, fontWeight:700, letterSpacing:'-0.01em', background:'linear-gradient(135deg, #ffffff 0%, #93c5fd 100%)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent'}},'LightPulse'),
             React.createElement('span', {style:{fontSize:11, padding:'1px 6px', borderRadius:4, background:'linear-gradient(135deg, #0284c7, #2563eb)', color:'#fff', fontWeight:700, letterSpacing:'0.05em'}}, 'APM'),
-            React.createElement('span', {style:{fontSize:11, padding:'1px 6px', borderRadius:4, background:'rgba(255,255,255,0.1)', color:'#38bdf8', border:'1px solid rgba(56,189,248,0.3)', fontFamily:'monospace', fontWeight:600}}, 'v0.0.11'),
+            React.createElement('span', {style:{fontSize:11, padding:'1px 6px', borderRadius:4, background:'rgba(255,255,255,0.1)', color:'#38bdf8', border:'1px solid rgba(56,189,248,0.3)', fontFamily:'monospace', fontWeight:600}}, 'v0.0.12'),
             React.createElement('span', {style:{fontSize:14, color:'#cbd5e1', fontWeight:500}}, '全景监控平台')
           ),
           React.createElement('div',{className:'sub', style:{margin:0, fontSize:12, opacity:0.85, color:'#cbd5e1'}},'轻量全栈主机资源监控与接口巡检中心')
@@ -5390,7 +5748,7 @@ function App() {
       React.createElement('footer', { className: 'lp-footer' },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
           React.createElement(LightPulseLogo, { size: 18 }),
-          React.createElement('span', {}, 'LightPulse APM v0.0.11 · Apache-2.0 Open Source · 轻量级全栈性能监控与根因剖析平台')
+          React.createElement('span', {}, 'LightPulse APM v0.0.12 · Apache-2.0 Open Source · 轻量级全栈性能监控与根因剖析平台')
         ),
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
           React.createElement('span', { style: { color: '#94a3b8' } }, '觉得好用？欢迎给开源项目点个'),

@@ -13,6 +13,7 @@ import java.io.FileOutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -28,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class LogCollectorIntegrationTest {
 
     private static HttpServer server;
+    private static File tempCheckpointDir;
     private static final List<String> bodies = new CopyOnWriteArrayList<>();
     private static final List<String> tokens = new CopyOnWriteArrayList<>();
 
@@ -46,6 +48,8 @@ class LogCollectorIntegrationTest {
         });
         server.start();
 
+        tempCheckpointDir = Files.createTempDirectory("lp-cp-test").toFile();
+        LogCollector.setCheckpointFile(new File(tempCheckpointDir, "checkpoints.dat"));
         AgentConfig cfg = AgentConfig.parse("appName=it-app");
         // AgentConfig.parse 会读取工作目录下的 config.json（本地开发配置），这里显式覆盖，保证测试不依赖它
         cfg.setServerUrl("http://127.0.0.1:" + server.getAddress().getPort());
@@ -57,6 +61,11 @@ class LogCollectorIntegrationTest {
     static void stop() {
         LogCollector.shutdown();
         server.stop(0);
+        if (tempCheckpointDir != null) {
+            File[] fs = tempCheckpointDir.listFiles();
+            if (fs != null) for (File f : fs) f.delete();
+            tempCheckpointDir.delete();
+        }
     }
 
     @AfterEach
@@ -161,5 +170,69 @@ class LogCollectorIntegrationTest {
 
         awaitTrue(() -> all().contains("tail-of-old"), "旧文件尾部日志");
         awaitTrue(() -> all().contains("first-of-new"), "新文件首条日志");
+    }
+
+    @Test
+    void preExistingWildcardFilesDoNotReReadHistoryWhenSwitching(@TempDir File dir) throws Exception {
+        File fa = new File(dir, "svc-a.log");
+        File fb = new File(dir, "svc-b.log");
+        Files.writeString(fa.toPath(), "2026-11-11 13:56:00 INFO old-history-a\n");
+        Files.writeString(fb.toPath(), "2026-11-11 13:56:00 INFO old-history-b\n");
+        long now = System.currentTimeMillis();
+        assertTrue(fb.setLastModified(now - 30_000));
+        assertTrue(fa.setLastModified(now - 10_000));
+
+        LogCollector.updateConfigs(Collections.singletonList(
+                config(3, new File(dir, "svc-*.log").getAbsolutePath())));
+        Thread.sleep(2500);
+
+        // 另一个原本就存在的文件被追加写入新行并触发文件切换
+        append(fb, "2026-11-11T03:27:43.080-05:00 INFO new-line-b\n");
+        assertTrue(fb.setLastModified(System.currentTimeMillis() + 5_000));
+        awaitTrue(() -> all().contains("new-line-b"), "svc-b 新增行");
+
+        // 切回 svc-a，不应从头重读 old-history-a，也不应重复上报
+        append(fa, "2026-11-11 17:00:02 INFO new-line-a\n");
+        assertTrue(fa.setLastModified(System.currentTimeMillis() + 10_000));
+        awaitTrue(() -> all().contains("new-line-a"), "svc-a 新增行");
+
+        String got = all();
+        assertFalse(got.contains("old-history-a"), "切回已有文件时不应从字节 0 重读历史日志");
+        assertFalse(got.contains("old-history-b"), "切换到已有文件时不应从字节 0 重读历史日志");
+        // 验证日志时间被解析为真实时间（-05:00 -> 1794385663080L），而不是采集时刻
+        assertTrue(got.contains("\"timestamp\":1794385663080"), "应上报解析出的日志真实时间戳: " + got);
+    }
+
+    @Test
+    void resumesFromPersistedCheckpointAfterRestartWithoutDuplicates(@TempDir File dir) throws Exception {
+        File cpFile = new File(dir, "it-cp.dat");
+        LogCollector.setCheckpointFile(cpFile);
+
+        File log = new File(dir, "restart.log");
+        Files.writeString(log.toPath(), "2026-11-11 10:00:00 INFO pre-existing-history-header-padding-to-exceed-64-bytes\n");
+
+        LogCollector.updateConfigs(Collections.singletonList(config(4, log.getAbsolutePath())));
+        Thread.sleep(2200);
+
+        append(log, "2026-11-11 10:00:01 INFO before-restart-line\n");
+        awaitTrue(() -> all().contains("before-restart-line"), "重启前新增日志");
+
+        // 模拟 Agent 停机并卸载规则（会强制刷盘保存游标）
+        LogCollector.updateConfigs(Collections.emptyList());
+        Thread.sleep(400);
+        assertTrue(cpFile.exists(), "停机时应持久化断点文件");
+
+        bodies.clear();
+        // 模拟 Agent 离线期间业务进程继续写入日志
+        append(log, "2026-11-11 10:00:02 INFO written-while-agent-down\n");
+
+        // 模拟 Agent 重启：重新加载同一个断点文件并重新挂载规则
+        LogCollector.setCheckpointFile(cpFile);
+        LogCollector.updateConfigs(Collections.singletonList(config(4, log.getAbsolutePath())));
+
+        awaitTrue(() -> all().contains("written-while-agent-down"), "恢复断点后应补采停机期间日志");
+        String got = all();
+        assertFalse(got.contains("pre-existing-history"), "不应重复采集最早的历史日志");
+        assertFalse(got.contains("before-restart-line"), "不应重复采集重启前已读过的日志");
     }
 }
