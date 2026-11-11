@@ -22,6 +22,7 @@ import java.util.*;
 public class DashboardService {
 
     private final ApmSystemMetricRepo systemMetricRepo;
+    private final ApmEndpointMetricRepo endpointMetricRepo;
     private final ApmProbeRecordRepo probeRecordRepo;
     private final ApmSlowSqlRepo slowSqlRepo;
     private final ApmAlertRecordRepo alertRecordRepo;
@@ -64,29 +65,41 @@ public class DashboardService {
 
         // 1. 生成连续的 Timeline 时间切片桶
         List<String> timeline = new ArrayList<>();
-        List<LocalDateTime> bucketTimes = new ArrayList<>();
         DateTimeFormatter fmt = useDayFmt ? TIME_FMT_DAY : TIME_FMT_MIN;
 
         LocalDateTime cursor = since;
         while (!cursor.isAfter(now)) {
             timeline.add(cursor.format(fmt));
-            bucketTimes.add(cursor);
             cursor = cursor.plusMinutes(bucketMinutes);
         }
         int bucketCount = timeline.size();
 
         // 2. 查询并按时间桶聚合系统指标 (CPU、整机内存、JVM内存、外部进程内存)
-        List<ApmSystemMetric> metricList;
+        List<ApmSystemMetric> metricList = new ArrayList<>();
         int queryMinutes = Math.min(minutes, 10080);
         if (storageEngineService.isEsActive()) {
-            List<ApmSystemMetric> esList = isCluster
-                    ? esStorageService.queryHostHistory("*", queryMinutes, storageEngineService.getCurrentConfig())
-                    : esStorageService.queryHostHistory(hostName, queryMinutes, storageEngineService.getCurrentConfig());
-            metricList = (esList != null && !esList.isEmpty()) ? esList : systemMetricRepo.selectRecentMetricsForCluster(queryMinutes);
-        } else {
-            metricList = isCluster
-                    ? systemMetricRepo.selectRecentMetricsForCluster(queryMinutes)
-                    : systemMetricRepo.selectRecentMetrics(hostName, queryMinutes);
+            try {
+                List<ApmSystemMetric> esList = isCluster
+                        ? esStorageService.queryHostHistory("*", queryMinutes, storageEngineService.getCurrentConfig())
+                        : esStorageService.queryHostHistory(hostName, queryMinutes, storageEngineService.getCurrentConfig());
+                if (esList != null && !esList.isEmpty()) {
+                    metricList.addAll(esList);
+                }
+            } catch (Exception e) {
+                log.warn("[Dashboard] 从 ES 查询主机历史指标失败: {}", e.getMessage());
+            }
+        }
+        if (metricList.isEmpty() && !storageEngineService.isPureEs()) {
+            try {
+                List<ApmSystemMetric> dbList = isCluster
+                        ? systemMetricRepo.selectRecentMetricsForCluster(since)
+                        : systemMetricRepo.selectRecentMetrics(hostName, since);
+                if (dbList != null && !dbList.isEmpty()) {
+                    metricList.addAll(dbList);
+                }
+            } catch (Exception e) {
+                log.warn("[Dashboard] 从数据库查询主机历史指标失败: {}", e.getMessage());
+            }
         }
 
         // 数据为空兜底当前内存中的最新指标
@@ -175,18 +188,40 @@ public class DashboardService {
             }
         } catch (Exception ignored) {}
 
-        // 聚合真实业务 HTTP 流量
+        // 聚合监控中心自身接入的 HTTP 流量
         Map<String, int[]> trafficStats = (trafficRecorder != null)
                 ? trafficRecorder.aggregateTraffic(since, bucketMinutes, bucketCount)
                 : Map.of("requests", new int[bucketCount], "errors", new int[bucketCount]);
         int[] realHttpRequests = trafficStats.getOrDefault("requests", new int[bucketCount]);
         int[] realHttpErrors = trafficStats.getOrDefault("errors", new int[bucketCount]);
 
+        // 聚合 ByteBuddy Agent / Starter 上报的业务接口流量 (apm_endpoint_metric)
+        int[] endpointCalls = new int[bucketCount];
+        int[] endpointErrors = new int[bucketCount];
+        try {
+            List<ApmEndpointMetric> epList = queryEndpointMetrics(isCluster, hostName, since);
+            for (ApmEndpointMetric em : epList) {
+                LocalDateTime bTime = em.getBucketMinute() != null ? em.getBucketMinute()
+                        : (em.getCreatedAt() != null ? em.getCreatedAt() : now);
+                int idx = findBucketIndex(bTime, since, bucketMinutes, bucketCount);
+                if (idx >= 0 && idx < bucketCount) {
+                    endpointCalls[idx] += (em.getTotalCalls() != null ? em.getTotalCalls() : 0);
+                    endpointErrors[idx] += (em.getErrorCalls() != null ? em.getErrorCalls() : 0);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[Dashboard] 聚合业务接口指标失败: {}", e.getMessage());
+        }
+
+        int[] combinedHttpRequests = new int[bucketCount];
         int[] totalApiCalls = new int[bucketCount];
         int[] totalApiErrors = new int[bucketCount];
         for (int i = 0; i < bucketCount; i++) {
-            totalApiCalls[i] = realHttpRequests[i] + probeCalls[i];
-            totalApiErrors[i] = realHttpErrors[i] + probeErrors[i];
+            int serverReq = isCluster ? realHttpRequests[i] : 0;
+            int serverErr = isCluster ? realHttpErrors[i] : 0;
+            combinedHttpRequests[i] = serverReq + endpointCalls[i];
+            totalApiCalls[i] = combinedHttpRequests[i] + probeCalls[i];
+            totalApiErrors[i] = serverErr + endpointErrors[i] + probeErrors[i];
         }
 
         // 4. 统计慢 SQL 频次与告警事件频次
@@ -223,7 +258,7 @@ public class DashboardService {
         } catch (Exception ignored) {}
 
         // 5. 组合并返回最终全景趋势大屏数据结构
-        Map<String, Object> summary = buildSummaryKpis(isCluster, hostName);
+        Map<String, Object> summary = buildSummaryKpis(isCluster, hostName, metricList);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("hostName", hostName);
         data.put("range", range);
@@ -251,7 +286,7 @@ public class DashboardService {
         Map<String, Object> throughputMap = Map.of(
                 "totalCalls", toList(totalApiCalls),
                 "errorCalls", toList(totalApiErrors),
-                "httpRequests", toList(realHttpRequests),
+                "httpRequests", toList(combinedHttpRequests),
                 "probeCalls", toList(probeCalls)
         );
         data.put("throughputTrend", throughputMap);
@@ -265,7 +300,7 @@ public class DashboardService {
         return Map.of("code", 200, "data", data);
     }
 
-    private Map<String, Object> buildSummaryKpis(boolean isCluster, String hostName) {
+    private Map<String, Object> buildSummaryKpis(boolean isCluster, String hostName, List<ApmSystemMetric> fallbackMetrics) {
         Map<String, Object> summary = new LinkedHashMap<>();
         List<ApmApplication> apps = Collections.emptyList();
         try {
@@ -279,21 +314,33 @@ public class DashboardService {
             onlineHosts = totalHosts;
         }
 
-        // 最新 CPU 与内存快照
+        // 最新 CPU 与内存快照（优先内存极速缓存，服务端刚重启时用历史最新一条兜底）
+        Map<String, ApmSystemMetric> snapshotMap = new LinkedHashMap<>();
+        for (ApmSystemMetric m : SystemMetricController.LATEST_HOST_METRICS.values()) {
+            if (isCluster || hostName.equals(m.getHostName())) {
+                snapshotMap.put(m.getAppName() + "::" + m.getHostName(), m);
+            }
+        }
+        if (snapshotMap.isEmpty() && fallbackMetrics != null) {
+            for (ApmSystemMetric m : fallbackMetrics) {
+                if (isCluster || (hostName != null && hostName.equals(m.getHostName()))) {
+                    snapshotMap.put(m.getAppName() + "::" + m.getHostName(), m);
+                }
+            }
+        }
+
         double curCpu = 0.0, curMem = 0.0;
         long totalMemBytes = 0L, usedMemBytes = 0L;
         int hostCount = 0;
 
-        for (ApmSystemMetric m : SystemMetricController.LATEST_HOST_METRICS.values()) {
-            if (isCluster || hostName.equals(m.getHostName())) {
-                curCpu += (m.getSystemCpuLoad() != null ? m.getSystemCpuLoad() : 0.0);
-                curMem += (m.getMemoryUsedPercent() != null ? m.getMemoryUsedPercent() : 0.0);
-                long tm = (m.getTotalPhysicalMemory() != null ? m.getTotalPhysicalMemory() : 0L);
-                long fm = (m.getFreePhysicalMemory() != null ? m.getFreePhysicalMemory() : 0L);
-                totalMemBytes += tm;
-                usedMemBytes += Math.max(0, tm - fm);
-                hostCount++;
-            }
+        for (ApmSystemMetric m : snapshotMap.values()) {
+            curCpu += (m.getSystemCpuLoad() != null ? m.getSystemCpuLoad() : 0.0);
+            curMem += (m.getMemoryUsedPercent() != null ? m.getMemoryUsedPercent() : 0.0);
+            long tm = (m.getTotalPhysicalMemory() != null ? m.getTotalPhysicalMemory() : 0L);
+            long fm = (m.getFreePhysicalMemory() != null ? m.getFreePhysicalMemory() : 0L);
+            totalMemBytes += tm;
+            usedMemBytes += Math.max(0, tm - fm);
+            hostCount++;
         }
         if (hostCount > 0) {
             curCpu = round(curCpu / hostCount);
@@ -316,10 +363,24 @@ public class DashboardService {
         } catch (Exception ignored) {}
         double probeSuccessRate = todayProbeCalls > 0 ? round((double) todayProbeSuccess / todayProbeCalls * 100.0) : 100.0;
 
-        // 今日业务 HTTP 流量统计
+        // 今日业务 HTTP 流量统计（合并 ByteBuddy 接口上报数据与服务端实时流量记录）
         Map<String, Object> trafficSummary = (trafficRecorder != null) ? trafficRecorder.getTodaySummary() : Map.of();
-        long todayHttpRequests = (trafficSummary.get("totalRequests") instanceof Number n) ? n.longValue() : 0L;
-        double avgCostMs = (trafficSummary.get("avgCostMs") instanceof Number n) ? n.doubleValue() : 0.0;
+        long todayServerHttpReq = isCluster && (trafficSummary.get("totalRequests") instanceof Number n) ? n.longValue() : 0L;
+        double serverAvgCostMs = isCluster && (trafficSummary.get("avgCostMs") instanceof Number n) ? n.doubleValue() : 0.0;
+
+        long epTotalCalls = 0L;
+        long epTotalCostMs = 0L;
+        try {
+            List<ApmEndpointMetric> todayEpList = queryEndpointMetrics(isCluster, hostName, todayStart);
+            for (ApmEndpointMetric em : todayEpList) {
+                epTotalCalls += (em.getTotalCalls() != null ? em.getTotalCalls() : 0);
+                epTotalCostMs += (em.getTotalCostMs() != null ? em.getTotalCostMs() : 0L);
+            }
+        } catch (Exception ignored) {}
+
+        long todayHttpRequests = todayServerHttpReq + epTotalCalls;
+        long combinedCostMs = Math.round(serverAvgCostMs * todayServerHttpReq) + epTotalCostMs;
+        double avgCostMs = todayHttpRequests > 0 ? round((double) combinedCostMs / todayHttpRequests) : 0.0;
         long totalTodayCalls = todayProbeCalls + todayHttpRequests;
 
         // 今日慢 SQL
@@ -353,6 +414,32 @@ public class DashboardService {
         summary.put("todaySlowSqls", todaySlowSqls);
         summary.put("unackedAlerts", unackedAlerts);
         return summary;
+    }
+
+    private List<ApmEndpointMetric> queryEndpointMetrics(boolean isCluster, String hostName, LocalDateTime since) {
+        if (endpointMetricRepo == null) {
+            return Collections.emptyList();
+        }
+        LambdaQueryWrapper<ApmEndpointMetric> wrapper = new LambdaQueryWrapper<ApmEndpointMetric>()
+                .ge(ApmEndpointMetric::getBucketMinute, since);
+        if (!isCluster && hostName != null && !hostName.isBlank()) {
+            Set<String> matchedApps = new LinkedHashSet<>();
+            matchedApps.add(hostName);
+            try {
+                List<ApmApplication> apps = appRepo.selectList(new LambdaQueryWrapper<ApmApplication>()
+                        .eq(ApmApplication::getHostName, hostName)
+                        .or().eq(ApmApplication::getIpAddress, hostName)
+                        .or().eq(ApmApplication::getAppName, hostName));
+                for (ApmApplication a : apps) {
+                    if (a.getAppName() != null && !a.getAppName().isBlank()) {
+                        matchedApps.add(a.getAppName());
+                    }
+                }
+            } catch (Exception ignored) {}
+            wrapper.and(w -> w.in(ApmEndpointMetric::getAppName, matchedApps)
+                    .or().like(ApmEndpointMetric::getInstanceId, hostName));
+        }
+        return endpointMetricRepo.selectList(wrapper);
     }
 
     private int findBucketIndex(LocalDateTime target, LocalDateTime start, int bucketMinutes, int totalBuckets) {

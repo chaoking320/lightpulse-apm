@@ -799,7 +799,8 @@ public class ProbeConfigController {
                 return Map.of("code", 200, "data", Collections.emptyList());
             }
         }
-        List<ApmSystemMetric> history = systemMetricRepo.selectRecentMetrics(hostName, Math.min(minutes, 1440));
+        List<ApmSystemMetric> history = systemMetricRepo.selectRecentMetrics(
+                hostName, LocalDateTime.now().minusMinutes(Math.min(minutes, 1440)));
         return Map.of("code", 200, "data", history);
     }
 

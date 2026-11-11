@@ -482,26 +482,41 @@ public class EsStorageService {
             String prefix = (config.getEsIndexPrefix() != null && !config.getEsIndexPrefix().isBlank()) ? config.getEsIndexPrefix() : "apm_";
             String alias = prefix + "metrics";
 
-            int safeMinutes = Math.max(5, Math.min(minutes, 1440));
-            String queryJson = String.format("""
-                {
-                  "size": 1000,
-                  "query": {
-                    "bool": {
-                      "must": [
-                        { "range": { "@timestamp": { "gte": "now-%dm" } } }
-                      ],
-                      "should": [
-                        { "term": { "hostName": "%s" } },
-                        { "term": { "ipAddress": "%s" } },
-                        { "term": { "appName": "%s" } }
-                      ],
-                      "minimum_should_match": 1
+            int safeMinutes = Math.max(5, Math.min(minutes, 10080));
+            boolean isAllHosts = (hostName == null || hostName.isBlank() || "*".equals(hostName.trim()) || "ALL".equalsIgnoreCase(hostName.trim()));
+            String queryJson;
+            if (isAllHosts) {
+                queryJson = String.format("""
+                    {
+                      "size": 1000,
+                      "query": {
+                        "range": { "@timestamp": { "gte": "now-%dm" } }
+                      },
+                      "sort": [{ "@timestamp": { "order": "asc" } }]
                     }
-                  },
-                  "sort": [{ "@timestamp": { "order": "asc" } }]
-                }
-                """, safeMinutes, hostName, hostName, hostName);
+                    """, safeMinutes);
+            } else {
+                String safeHost = hostName.replace("\\", "\\\\").replace("\"", "\\\"");
+                queryJson = String.format("""
+                    {
+                      "size": 1000,
+                      "query": {
+                        "bool": {
+                          "must": [
+                            { "range": { "@timestamp": { "gte": "now-%dm" } } }
+                          ],
+                          "should": [
+                            { "term": { "hostName": "%s" } },
+                            { "term": { "ipAddress": "%s" } },
+                            { "term": { "appName": "%s" } }
+                          ],
+                          "minimum_should_match": 1
+                        }
+                      },
+                      "sort": [{ "@timestamp": { "order": "asc" } }]
+                    }
+                    """, safeMinutes, safeHost, safeHost, safeHost);
+            }
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(cleanUrl + "/" + alias + "*/_search?ignore_unavailable=true"))
