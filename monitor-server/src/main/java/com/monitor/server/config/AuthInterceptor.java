@@ -109,6 +109,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (uri == null) return false;
         return uri.endsWith("/login.html")
                 || uri.contains("/auth/login")
+                || uri.contains("/auth/demo-viewer")
                 || uri.contains("/auth/captcha")
                 || uri.contains("/auth/status")
                 || uri.contains("/setup/status")

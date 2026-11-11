@@ -22,6 +22,9 @@ public class AuthController {
     private final AuthService authService;
     private final com.monitor.server.service.CaptchaService captchaService;
 
+    @org.springframework.beans.factory.annotation.Value("${monitor.demo.viewer-enabled:false}")
+    private boolean demoViewerEnabled;
+
     public static final String COOKIE_NAME = "LP_TOKEN";
 
     /**
@@ -149,7 +152,10 @@ public class AuthController {
         } else {
             return Map.of(
                     "code", 401,
-                    "data", Map.of("authenticated", false),
+                    "data", Map.of(
+                            "authenticated", false,
+                            "demoViewerEnabled", demoViewerEnabled
+                    ),
                     "message", "未登录或登录已过期"
             );
         }
@@ -185,6 +191,34 @@ public class AuthController {
             log.error("修改密码异常", e);
             return Map.of("code", 500, "message", "修改失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 公网演示专用：一键免密获取只读观察员 (VIEWER) 会话
+     */
+    @PostMapping("/demo-viewer")
+    public Map<String, Object> demoViewerLogin(HttpServletResponse response) {
+        if (!demoViewerEnabled) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            return Map.of("code", 403, "message", "当前实例未开启公网免密只读演示模式");
+        }
+        String token = authService.issueDemoViewerToken();
+        Cookie cookie = new Cookie(COOKIE_NAME, token);
+        cookie.setPath("/");
+        cookie.setMaxAge(24 * 3600);
+        cookie.setHttpOnly(false);
+        response.addCookie(cookie);
+
+        String viewerUser = authService.getAuthConfig().getViewerUsername();
+        return Map.of(
+                "code", 200,
+                "message", "已进入只读访客演示模式",
+                "data", Map.of(
+                        "token", token,
+                        "username", viewerUser != null ? viewerUser : "viewer",
+                        "role", AuthService.ROLE_VIEWER
+                )
+        );
     }
 
     public static String extractToken(HttpServletRequest request) {

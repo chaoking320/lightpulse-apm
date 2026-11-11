@@ -154,6 +154,82 @@
     border: 1px solid rgba(59, 130, 246, 0.25);
     font-family: monospace;
   }
+  .demo-portal {
+    display: none;
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid rgba(16, 185, 129, 0.28);
+    border-radius: 12px;
+    padding: 18px 16px;
+    margin-bottom: 12px;
+  }
+  .demo-portal-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #6ee7b7;
+    background: rgba(16, 185, 129, 0.14);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 999px;
+    padding: 3px 10px;
+    margin-bottom: 12px;
+  }
+  .demo-feature-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .demo-feat {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #cbd5e1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-demo-hero {
+    width: 100%;
+    padding: 13px 14px;
+    background: linear-gradient(135deg, #059669 0%, #0284c7 100%);
+    border: 1px solid rgba(52, 211, 153, 0.45);
+    border-radius: 9px;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.25);
+    transition: all 0.2s ease;
+  }
+  .btn-demo-hero:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 10px 28px rgba(56, 189, 248, 0.32);
+    filter: brightness(1.08);
+  }
+  .btn-demo-hero:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+  .manual-toggle {
+    margin-top: 12px;
+    text-align: center;
+  }
+  .manual-toggle button {
+    background: none;
+    border: none;
+    color: #64748b;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .manual-toggle button:hover { color: #94a3b8; }
 </style>
 </head>
 <body>
@@ -170,12 +246,33 @@
     <span id="errorMsg">账号或密码错误</span>
   </div>
 
+  <div id="demoPortalCard" class="demo-portal">
+    <div style="text-align:center;">
+      <span class="demo-portal-tag">● 在线实时监控演示 · Live Demo</span>
+    </div>
+    <div class="demo-feature-grid">
+      <div class="demo-feat">⚡ 全景时序大屏</div>
+      <div class="demo-feat">🔍 OS 跨进程 RCA</div>
+      <div class="demo-feat">🚨 暴涨现场黑匣子</div>
+      <div class="demo-feat">🔑 动态 Token 拨测</div>
+    </div>
+    <button type="button" id="demoViewerBtn" class="btn-demo-hero" onclick="loginAsDemoViewer()">
+      🚀 立即进入监控大屏体验
+    </button>
+    <div style="margin-top:10px;text-align:center;font-size:11.5px;color:#94a3b8;">
+      一键免密体验全景时序监控、全机进程排查与动态接口拨测
+    </div>
+    <div class="manual-toggle">
+      <button type="button" onclick="toggleManualLogin()" id="manualToggleBtn">使用授权人员账号登录</button>
+    </div>
+  </div>
+
   <form id="loginForm" onsubmit="handleLogin(event)">
     <div class="form-group">
       <label class="form-label">登录账号</label>
       <div class="input-wrapper">
         <span class="input-icon">👤</span>
-        <input type="text" id="username" class="form-control" placeholder="管理员 admin 或只读账号 viewer" required autocomplete="username">
+        <input type="text" id="username" class="form-control" placeholder="请输入授权账号" required autocomplete="username">
       </div>
     </div>
 
@@ -183,7 +280,7 @@
       <label class="form-label">登录密码</label>
       <div class="input-wrapper">
         <span class="input-icon">🔒</span>
-        <input type="password" id="password" class="form-control" placeholder="请输入管理员密码" required autocomplete="current-password">
+        <input type="password" id="password" class="form-control" placeholder="请输入登录密码" required autocomplete="current-password">
       </div>
     </div>
 
@@ -279,6 +376,61 @@ function loadCaptcha() {
 }
 
 // 页面加载完毕自动拉取首张验证码
+function loginAsDemoViewer() {
+  hideError();
+  const btn = document.getElementById('demoViewerBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerText = '正在进入监控大屏...';
+  }
+  fetch(BASE + '/api/auth/demo-viewer', { method: 'POST' })
+    .then(r => r.json())
+    .then(res => {
+      if (res && res.code === 200 && res.data && res.data.token) {
+        const token = res.data.token;
+        localStorage.setItem('LP_TOKEN', token);
+        localStorage.setItem('LP_USER', res.data.username || 'viewer');
+        localStorage.setItem('LP_ROLE', 'VIEWER');
+        document.cookie = `LP_TOKEN=${token}; path=/; max-age=86400; SameSite=Lax`;
+        window.location.replace(BASE + '/index.html?token=' + encodeURIComponent(token));
+      } else {
+        if (btn) { btn.disabled = false; btn.innerText = '🚀 立即进入监控大屏体验'; }
+        showError((res && res.message) || '只读体验模式暂未开启');
+      }
+    })
+    .catch(err => {
+      if (btn) { btn.disabled = false; btn.innerText = '🚀 立即进入监控大屏体验'; }
+      showError('请求失败: ' + err.message);
+    });
+}
+
+function toggleManualLogin() {
+  const form = document.getElementById('loginForm');
+  const toggleBtn = document.getElementById('manualToggleBtn');
+  if (!form) return;
+  const hidden = form.style.display === 'none';
+  form.style.display = hidden ? 'block' : 'none';
+  if (toggleBtn) toggleBtn.innerText = hidden ? '收起账号密码登录' : '使用授权人员账号登录';
+}
+
+(function checkDemoMode() {
+  const params = new URLSearchParams(window.location.search);
+  const wantAutoDemo = params.get('demo') === '1' || params.get('demo') === 'viewer';
+  fetch(BASE + '/api/auth/status')
+    .then(r => r.json())
+    .then(res => {
+      if (res && res.data && res.data.demoViewerEnabled) {
+        const card = document.getElementById('demoPortalCard');
+        const form = document.getElementById('loginForm');
+        if (card) card.style.display = 'block';
+        if (form) form.style.display = 'none';
+        if (wantAutoDemo && !localStorage.getItem('LP_TOKEN')) {
+          loginAsDemoViewer();
+        }
+      }
+    }).catch(() => {});
+})();
+
 document.addEventListener('DOMContentLoaded', loadCaptcha);
 // 兜底立即执行一次
 loadCaptcha();

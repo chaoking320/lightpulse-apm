@@ -42,6 +42,20 @@ public class ProbeConfigController {
     private final com.monitor.server.repository.ApmHostConfigRepo hostConfigRepo;
     private final com.monitor.server.service.SqlProbeService sqlProbeService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.monitor.server.service.AuthService authService;
+
+    private boolean isViewerRequest(jakarta.servlet.http.HttpServletRequest request) {
+        if (authService == null || request == null) return false;
+        String token = AuthController.extractToken(request);
+        if (token == null || token.isBlank()) return false;
+        return com.monitor.server.service.AuthService.ROLE_VIEWER.equalsIgnoreCase(authService.getRole(token));
+    }
+
+    private String maskIfPresent(String val) {
+        return (val != null && !val.isBlank()) ? "****** (只读模式下已脱敏)" : val;
+    }
+
     @PostConstruct
     public void initDbAndPreload() {
         try {
@@ -177,13 +191,19 @@ public class ProbeConfigController {
      * 控制台：查询所有接口校验组列表
      */
     @GetMapping("/probe-groups")
-    public Map<String, Object> listProbeGroups() {
+    public Map<String, Object> listProbeGroups(jakarta.servlet.http.HttpServletRequest request) {
+        boolean viewer = isViewerRequest(request);
         List<ApmProbeGroup> groups = probeGroupRepo.selectList(
                 new LambdaQueryWrapper<ApmProbeGroup>().orderByDesc(ApmProbeGroup::getId));
         for (ApmProbeGroup g : groups) {
             Long count = probeConfigRepo.selectCount(
                     new LambdaQueryWrapper<ApmProbeConfig>().eq(ApmProbeConfig::getGroupId, g.getId()));
             g.setProbeCount(count != null ? count.intValue() : 0);
+            if (viewer) {
+                g.setLoginHeaders(maskIfPresent(g.getLoginHeaders()));
+                g.setLoginBody(maskIfPresent(g.getLoginBody()));
+                g.setStaticHeaderValue(maskIfPresent(g.getStaticHeaderValue()));
+            }
         }
         return Map.of("code", 200, "data", groups);
     }
@@ -355,7 +375,8 @@ public class ProbeConfigController {
      * 控制台：查询所有探针配置列表
      */
     @GetMapping("/probes")
-    public Map<String, Object> listAllProbes() {
+    public Map<String, Object> listAllProbes(jakarta.servlet.http.HttpServletRequest request) {
+        boolean viewer = isViewerRequest(request);
         List<ApmProbeConfig> list = probeConfigRepo.selectList(
                 new LambdaQueryWrapper<ApmProbeConfig>().orderByDesc(ApmProbeConfig::getId));
         Map<Long, String> groupMap = new HashMap<>();
@@ -369,6 +390,14 @@ public class ProbeConfigController {
                 p.setGroupName(groupMap.get(p.getGroupId()));
             }
             unpackTokenConfig(p);
+            if (viewer) {
+                p.setLoginBody(maskIfPresent(p.getLoginBody()));
+                p.setStaticHeaderValue(maskIfPresent(p.getStaticHeaderValue()));
+                p.setTokenConfig(maskIfPresent(p.getTokenConfig()));
+                p.setRequestHeaders(maskIfPresent(p.getRequestHeaders()));
+                p.setRequestBody(maskIfPresent(p.getRequestBody()));
+                p.setSqlPassword(maskIfPresent(p.getSqlPassword()));
+            }
         }
         return Map.of("code", 200, "data", list);
     }

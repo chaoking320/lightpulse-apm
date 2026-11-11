@@ -14,6 +14,14 @@
 
 > **LightPulse APM** 是一套专为企业私有化内网、混合云、微服务与混合部署（Java + Python AI + ES 等）量身打造的高性能、轻量级、零侵入的现代化全栈可观测平台。集成了**全景时序大屏、全机进程根因排查（OS RCA）、暴涨案发现场黑匣子、轻量级日志中心（Log Explorer）、全分区磁盘看板与动态接口巡检拨测**。
 
+<p align="center">
+  <a href="https://apm.demo.shanyiai.site/login.html?demo=1" target="_blank">
+    <img src="https://img.shields.io/badge/🚀_在线真实体验-LightPulse_APM_实时监控大屏-10b981?style=for-the-badge" alt="LightPulse Live Demo" />
+  </a>
+</p>
+
+> 🌐 **在线真实体验 (Live Demo)**：https://apm.demo.shanyiai.site/login.html?demo=1
+
 ---
 
 ## 🌟 核心特性与架构优势

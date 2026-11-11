@@ -230,6 +230,28 @@ public class AuthService {
         return null;
     }
 
+    /**
+     * 签发只读演示访客 Token（仅当 monitor.demo.viewer-enabled=true 时对外开放）
+     */
+    public String issueDemoViewerToken() {
+        long now = System.currentTimeMillis();
+        activeTokens.entrySet().removeIf(e -> {
+            if (now > e.getValue()) {
+                tokenRoles.remove(e.getKey());
+                tokenUsers.remove(e.getKey());
+                return true;
+            }
+            return false;
+        });
+        String token = generateToken();
+        activeTokens.put(token, now + 24L * 3600 * 1000);
+        tokenRoles.put(token, ROLE_VIEWER);
+        String viewerName = authConfig.getViewerUsername() != null ? authConfig.getViewerUsername() : "viewer";
+        tokenUsers.put(token, viewerName);
+        log.info("[Auth] 已签发公网只读演示访客 (VIEWER) 令牌");
+        return token;
+    }
+
     private boolean matchPassword(String rawPassword, String storedHash) {
         if (rawPassword == null || storedHash == null) return false;
         // 使用 PasswordService 进行安全验证（自动兼容 SHA-256 旧密码）
