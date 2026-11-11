@@ -66,15 +66,22 @@ public class SystemMetricsCollector {
         // 3. 物理内存 (Bytes)
         long totalMemory = osBean.getTotalMemorySize();
         long freeMemory = osBean.getFreeMemorySize();
-        // 优先在 Linux 环境下读取真实的 MemAvailable（自动剔除可回收的 buff/cache 文件缓存，避免虚高误报）
-        long linuxAvailable = getLinuxMemAvailable();
-        if (linuxAvailable > 0) {
-            freeMemory = linuxAvailable;
+        // 在 Linux 环境下同步从 /proc/meminfo 读取宿主机真实 MemTotal 与 MemAvailable，
+        // 避免容器内 osBean 返回 cgroup limit 而 MemAvailable 返回宿主机总量导致比例错位甚至负值
+        long[] linuxMem = getLinuxMemInfo();
+        if (linuxMem[0] > 0) {
+            totalMemory = linuxMem[0];
+        }
+        if (linuxMem[1] > 0) {
+            freeMemory = linuxMem[1];
+        }
+        if (totalMemory > 0 && freeMemory > totalMemory) {
+            freeMemory = Math.min(freeMemory, totalMemory);
         }
         metrics.setTotalPhysicalMemory(totalMemory);
         metrics.setFreePhysicalMemory(freeMemory);
         if (totalMemory > 0) {
-            double usedMemory = (double) (totalMemory - freeMemory) / totalMemory * 100.0;
+            double usedMemory = Math.max(0.0, Math.min(100.0, (double) (totalMemory - freeMemory) / totalMemory * 100.0));
             metrics.setMemoryUsedPercent(round(usedMemory));
         }
 
@@ -83,8 +90,9 @@ public class SystemMetricsCollector {
         metrics.setJvmTotalMemory(rt.totalMemory());
         metrics.setJvmUsedMemory(rt.totalMemory() - rt.freeMemory());
 
-        // 5. 遍历各磁盘分区 / 挂载点（跨平台兼容 Windows 盘符与 Linux 独立挂载点如 /data）
-        java.util.Set<String> seen = new java.util.HashSet<>();
+        // 5. 遍历各磁盘分区 / 挂载点（跨平台兼容 Windows 盘符与 Linux 独立挂载点如 /data；按底层设备去重防止容器单文件挂载刷屏）
+        java.util.Set<String> seenPaths = new java.util.HashSet<>();
+        java.util.Set<String> seenDevices = new java.util.HashSet<>();
         try {
             for (java.nio.file.FileStore store : java.nio.file.FileSystems.getDefault().getFileStores()) {
                 long totalSpace = store.getTotalSpace();
@@ -95,9 +103,8 @@ public class SystemMetricsCollector {
                         || type.equals("squashfs") || type.equals("devpts")) {
                     continue;
                 }
-                long usableSpace = store.getUsableSpace();
-                double usedPct = round((double) (totalSpace - usableSpace) / totalSpace * 100.0);
-                String path = store.name();
+                String devName = store.name();
+                String path = devName;
                 String desc = store.toString();
                 // 在 Linux 下 desc 格式如: /data (/dev/sdb1)，优先取挂载点路径
                 int pIdx = desc.indexOf(" (");
@@ -105,7 +112,17 @@ public class SystemMetricsCollector {
                     path = desc.substring(0, pIdx).trim();
                 }
                 if (path == null || path.isEmpty()) path = desc;
-                if (seen.add(path)) {
+                // 跳过容器内单文件 bind mount（如 /etc/hosts、/etc/localtime、/app/agent.jar 等）
+                if (path.startsWith("/app/") || path.equals("/etc/hosts") || path.equals("/etc/hostname")
+                        || path.equals("/etc/resolv.conf") || path.equals("/etc/localtime")) {
+                    continue;
+                }
+                if (devName != null && devName.startsWith("/dev/") && !seenDevices.add(devName)) {
+                    continue;
+                }
+                long usableSpace = store.getUsableSpace();
+                double usedPct = round((double) (totalSpace - usableSpace) / totalSpace * 100.0);
+                if (seenPaths.add(path)) {
                     metrics.getDisks().add(new SystemMetrics.DiskInfo(path, totalSpace, usableSpace, usedPct));
                 }
             }
@@ -135,26 +152,29 @@ public class SystemMetricsCollector {
     }
 
     /**
-     * 读取 Linux /proc/meminfo 中的 MemAvailable（单位: 字节）
-     * 准确反映操作系统真实可用内存（排除 buff/cache 中可随时回收的部分，与 top/free -m 保持一致）
+     * 同步读取 Linux /proc/meminfo 中的 [MemTotal, MemAvailable]（单位: 字节）
+     * 准确反映宿主机真实物理内存总量与可用内存（兼容容器 pid=host 场景并排除 buff/cache 虚高）
      */
-    private static long getLinuxMemAvailable() {
+    private static long[] getLinuxMemInfo() {
+        long[] res = new long[]{-1L, -1L};
         try {
             File meminfo = new File("/proc/meminfo");
             if (meminfo.exists() && meminfo.canRead()) {
                 try (BufferedReader br = new BufferedReader(new FileReader(meminfo))) {
                     String line;
                     while ((line = br.readLine()) != null) {
-                        if (line.startsWith("MemAvailable:")) {
+                        if (line.startsWith("MemTotal:")) {
                             String[] parts = line.split("\\s+");
-                            if (parts.length >= 2) {
-                                return Long.parseLong(parts[1]) * 1024L;
-                            }
+                            if (parts.length >= 2) res[0] = Long.parseLong(parts[1]) * 1024L;
+                        } else if (line.startsWith("MemAvailable:")) {
+                            String[] parts = line.split("\\s+");
+                            if (parts.length >= 2) res[1] = Long.parseLong(parts[1]) * 1024L;
                         }
+                        if (res[0] > 0 && res[1] > 0) break;
                     }
                 }
             }
         } catch (Throwable ignored) {}
-        return -1L;
+        return res;
     }
 }
