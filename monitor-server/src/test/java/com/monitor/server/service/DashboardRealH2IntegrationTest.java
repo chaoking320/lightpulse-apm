@@ -2,6 +2,7 @@ package com.monitor.server.service;
 
 import com.monitor.server.controller.AgentController;
 import com.monitor.server.controller.DashboardController;
+import com.monitor.server.controller.LogController;
 import com.monitor.server.controller.ProbeConfigController;
 import com.monitor.server.controller.SystemMetricController;
 import com.monitor.server.entity.ApmSystemMetric;
@@ -40,6 +41,9 @@ class DashboardRealH2IntegrationTest {
 
     @Autowired
     private ProbeConfigController probeConfigController;
+
+    @Autowired
+    private LogController logController;
 
     @BeforeEach
     void forceH2Mode() {
@@ -115,5 +119,10 @@ class DashboardRealH2IntegrationTest {
         List<ApmSystemMetric> historyList = (List<ApmSystemMetric>) hostHistoryResp.get("data");
         assertFalse(historyList.isEmpty());
         assertEquals(36.5, historyList.get(0).getSystemCpuLoad());
+
+        // 5. 验证 LogController.searchLogs 在真实 H2 下带时间范围不会报 GROUP BY 错误
+        Map<String, Object> logSearchResp = logController.searchLogs(
+                null, null, null, null, null, null, null, null, "now-1h", "now", 1, 20);
+        assertEquals(200, logSearchResp.get("code"));
     }
 }

@@ -316,10 +316,9 @@ public class LogController {
         }
 
         var query = buildMysqlLogQuery(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, excludeKeyword, startTime, endTime);
-        query.orderByDesc(ApmLogRecord::getCreatedAt).orderByDesc(ApmLogRecord::getId);
-
         long total = logRecordRepo.selectCount(query);
-        var pageReq = new Page<ApmLogRecord>(page, size);
+        query.orderByDesc(ApmLogRecord::getCreatedAt).orderByDesc(ApmLogRecord::getId);
+        var pageReq = new Page<ApmLogRecord>(page, size, false);
         List<ApmLogRecord> list = logRecordRepo.selectPage(pageReq, query).getRecords();
 
         Map<String, Object> res = new LinkedHashMap<>();
@@ -622,7 +621,7 @@ public class LogController {
         }
         var query = buildMysqlLogQuery(appName, hostName, ipAddress, logPath, logLevel, traceId, keyword, excludeKeyword, startTime, endTime);
         query.orderByDesc(ApmLogRecord::getCreatedAt).orderByDesc(ApmLogRecord::getId);
-        return logRecordRepo.selectPage(new Page<>(1, maxRows), query).getRecords();
+        return logRecordRepo.selectPage(new Page<>(1, maxRows, false), query).getRecords();
     }
 
     static List<String> parseLogLevels(String logLevel) {
