@@ -1527,16 +1527,25 @@ function ProcessRcaModal({ visible, hostName, initialMode = 'realtime', onClose 
       .finally(() => setLoading(false));
   };
 
-  const loadRealtimeSnapshot = useCallback((hName) => {
+  const loadRealtimeSnapshot = useCallback((hName, forceRefresh = false) => {
     setLoading(true);
     const target = hName || selectedHost;
-    const url = (target && target !== 'ALL')
-      ? `/api/v1/system-metrics/process-snapshot?hostName=${encodeURIComponent(target)}`
-      : '/api/v1/system-metrics/process-snapshot';
+    const params = new URLSearchParams();
+    if (target && target !== 'ALL') params.set('hostName', target);
+    if (forceRefresh) params.set('refresh', 'true');
+    const qs = params.toString();
+    const url = qs ? `/api/v1/system-metrics/process-snapshot?${qs}` : '/api/v1/system-metrics/process-snapshot';
     api(url)
       .then(res => {
         if (res && res.data) {
           setSnapshot(res.data);
+          if (forceRefresh && target && target !== 'ALL' && res.data.source === 'AGENT_REALTIME') {
+            setTimeout(() => {
+              api(`/api/v1/system-metrics/process-snapshot?hostName=${encodeURIComponent(target)}`)
+                .then(r2 => { if (r2 && r2.data) setSnapshot(r2.data); })
+                .catch(() => {});
+            }, 3500);
+          }
         }
       })
       .catch(err => {
@@ -1577,7 +1586,9 @@ function ProcessRcaModal({ visible, hostName, initialMode = 'realtime', onClose 
       case 'JAVA_APP': return '#0284c7';
       case 'JAVA_OTHER': return '#38bdf8';
       case 'MYSQL': return '#6366f1';
-      default: return '#94a3b8';
+      case 'PAGE_CACHE': return '#cbd5e1';
+      case 'OTHER_PROCESSES': return '#94a3b8';
+      default: return '#64748b';
     }
   };
 
@@ -1665,7 +1676,7 @@ function ProcessRcaModal({ visible, hostName, initialMode = 'realtime', onClose 
               React.createElement('button', {
                 className: 'btn small',
                 disabled: loading,
-                onClick: () => loadRealtimeSnapshot(selectedHost)
+                onClick: () => loadRealtimeSnapshot(selectedHost, true)
               }, loading ? '⏳ 采样中...' : '🔄 重新抓取')
             )
           : React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
@@ -1789,7 +1800,18 @@ function ProcessRcaModal({ visible, hostName, initialMode = 'realtime', onClose 
         ),
         React.createElement('div', {},
           React.createElement('span', { style: { color: '#64748b' } }, '⏱️ 采样时间: '),
-          React.createElement('span', { style: { color: '#64748b' } }, snapshot?.capturedAt || '-')
+          React.createElement('span', { style: { color: '#64748b' } }, snapshot?.capturedAt || '-'),
+          snapshot?.source && React.createElement('span', {
+            style: {
+              marginLeft: 8,
+              fontSize: 10,
+              padding: '1px 6px',
+              borderRadius: 10,
+              fontWeight: 600,
+              background: snapshot.source === 'AGENT_REALTIME' ? '#dcfce7' : (snapshot.source === 'UNAVAILABLE' ? '#fef3c7' : '#e0f2fe'),
+              color: snapshot.source === 'AGENT_REALTIME' ? '#166534' : (snapshot.source === 'UNAVAILABLE' ? '#92400e' : '#0369a1')
+            }
+          }, snapshot.source === 'AGENT_REALTIME' ? '📡 探针直采' : (snapshot.source === 'UNAVAILABLE' ? '⚠️ 待升级探针' : '🖥️ 服务端本机'))
         )
       ),
 

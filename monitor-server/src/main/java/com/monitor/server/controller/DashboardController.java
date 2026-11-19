@@ -39,7 +39,11 @@ public class DashboardController {
      */
     @GetMapping("/system-metrics/process-snapshot")
     public Map<String, Object> getProcessSnapshot(
-            @RequestParam(value = "hostName", required = false) String hostName) {
+            @RequestParam(value = "hostName", required = false) String hostName,
+            @RequestParam(value = "refresh", required = false, defaultValue = "false") boolean refresh) {
+        if (refresh && hostName != null && !hostName.isBlank() && !"ALL".equalsIgnoreCase(hostName)) {
+            hostProcessInspector.requestRemoteCapture(hostName);
+        }
         return Map.of("code", 200, "data", hostProcessInspector.captureSnapshot(hostName));
     }
 

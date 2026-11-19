@@ -33,6 +33,12 @@ public class HostProcessSnapshot {
     private Boolean isCrimeScene;
     private String crimeSceneReason;
 
+    // 快照来源与精确内存拆解 (v0.0.13)
+    private String source;   // AGENT_REALTIME | SERVER_LOCAL | UNAVAILABLE
+    private String message;  // 提示说明（如老版本探针提示、指令已下发等）
+    private Long pageCacheBytes;
+    private Long otherProcessRssBytes;
+
     @JsonProperty("cpuLoadPercent")
     public Double getCpuLoadPercent() {
         return systemCpuLoad;

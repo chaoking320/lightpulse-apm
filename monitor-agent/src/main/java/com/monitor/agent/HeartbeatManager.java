@@ -1,10 +1,14 @@
 package com.monitor.agent;
 
 import com.monitor.agent.config.AgentConfig;
+import com.monitor.agent.system.SystemMetricsReporter;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 心跳管理器 —— 每 30 秒向服务端发送心跳，维持在线状态
@@ -56,7 +60,18 @@ public class HeartbeatManager {
                 os.write(body.getBytes("UTF-8"));
             }
             int code = conn.getResponseCode();
-            if (code >= 400) System.err.println("[HeartbeatManager] 心跳上报响应异常 (" + code + "): " + url);
+            if (code >= 400) {
+                System.err.println("[HeartbeatManager] 心跳上报响应异常 (" + code + "): " + url);
+            } else {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                    StringBuilder rb = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) rb.append(line);
+                    if (rb.toString().contains("\"captureNow\":true")) {
+                        SystemMetricsReporter.triggerImmediateReport();
+                    }
+                } catch (Exception ignored) {}
+            }
             conn.disconnect();
         } catch (Exception e) {
             // 心跳失败静默，不干扰应用运行

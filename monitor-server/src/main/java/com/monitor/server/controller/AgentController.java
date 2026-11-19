@@ -26,6 +26,7 @@ public class AgentController {
     private final com.monitor.server.service.SiteSettingService siteSettingService;
     private final BatchInsertHelper batchInsertHelper;
     private final com.monitor.server.metrics.CustomMetricsCollector metricsCollector;
+    private final com.monitor.server.service.HostProcessInspector hostProcessInspector;
 
     /**
      * Agent 注册 —— 应用初次接入时调用
@@ -103,7 +104,8 @@ public class AgentController {
                 log.warn("心跳自动注册失败: {}", e.getMessage());
             }
         }
-        return Map.of("code", 200);
+        boolean captureNow = hostProcessInspector != null && hostProcessInspector.consumePendingCapture(hostName);
+        return Map.of("code", 200, "captureNow", captureNow);
     }
 
     /**

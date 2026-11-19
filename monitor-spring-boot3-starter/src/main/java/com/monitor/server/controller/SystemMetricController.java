@@ -164,10 +164,19 @@ public class SystemMetricController {
                 }
             }
 
+            // 3.2 若探针附带了全机进程快照，优先入内存缓存（必须在 checkProactiveAlerts 之前，以便黑匣子捕获最新远程现场）
+            Object procSnapshotObj = payload.get("processSnapshot");
+            if (procSnapshotObj instanceof Map<?, ?> procMap && hostProcessInspector != null) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> typedMap = (Map<String, Object>) procMap;
+                hostProcessInspector.ingestRemoteSnapshot(appName, hostName, ipAddress, typedMap);
+            }
+
             // 4. 实时提前感知阈值告警
             checkProactiveAlerts(metric, diskJson);
 
-            return Map.of("code", 200, "message", "success");
+            boolean captureNow = hostProcessInspector != null && hostProcessInspector.consumePendingCapture(hostName);
+            return Map.of("code", 200, "message", "success", "captureNow", captureNow);
 
         } catch (Exception e) {
             log.error("处理系统指标上报异常: {}", e.getMessage(), e);
